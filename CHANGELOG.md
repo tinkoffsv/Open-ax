@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.1.1](https://github.com/tinkoffsv/Openax/compare/v0.1.0...v0.1.1) (2026-09-24)
+
+
+### Bug Fixes
+
+* publish to npm as @openax/cli ([4514556](https://github.com/tinkoffsv/Openax/commit/4514556cdbe3e58280a599d6b72b49bd570b2cb8))
+* publish to npm as @openax/cli ([db26737](https://github.com/tinkoffsv/Openax/commit/db267379bb7ab9b6fd5abbf6a72e531dada8a135))
+
 ## 0.1.0 (2026-09-24)
 
 
