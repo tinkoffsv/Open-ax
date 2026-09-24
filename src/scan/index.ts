@@ -11,6 +11,8 @@ import { scanEnv } from "./env.js";
 import { isWorkerService, scanInfra, type ComposeService } from "./infra.js";
 import { readManifests } from "./manifests.js";
 import { mechanismModules, pollingWorkers, preferCode, referencingFiles, scanRoutes } from "./sources.js";
+import { containerSource, propose, type Proposal } from "./profiles/index.js";
+import { buildSkeleton, type Skeleton } from "./skeleton.js";
 import { CATEGORIES, type Fact, type ScanResult } from "./types.js";
 
 export interface ScanLimits {
@@ -20,7 +22,7 @@ export interface ScanLimits {
 
 const DOC_FILES = /^README[^/]*$|(^|\/)docs?\/.+\.(md|mdx|rst|adoc)$|(^|\/)(adrs?|decisions)\/.+\.md$|^(CLAUDE|AGENTS|ARCHITECTURE)\.md$/i;
 
-function detect(root: string, files: string[]): { detections: Detection[]; infra: ReturnType<typeof scanInfra> } {
+function detect(root: string, files: string[]) {
   const manifests = readManifests(root, files);
   const infra = scanInfra(root, files);
   const env = scanEnv(root, files, infra.services);
@@ -42,7 +44,16 @@ function detect(root: string, files: string[]): { detections: Detection[]; infra
     const d: Detection = { tech, deps, env: envNames, envFiles, images, paths, source };
     if (evidenceOf(d).length > 0) detections.push(d);
   }
-  return { detections, infra };
+  return { detections, infra, manifests, envNames: [...env.keys()] };
+}
+
+/** The deterministic model skeleton and, per code container, the profile's component candidates. */
+export function scanModel(root: string, files: string[], d: ReturnType<typeof detect>): { skeleton: Skeleton; proposals: Proposal[] } {
+  const skeleton = buildSkeleton(root, files, d.detections, d.infra, d.manifests, d.envNames);
+  const proposals = skeleton.containers
+    .filter((c) => c.dir !== null && !c.infrastructure)
+    .map((c) => propose(containerSource({ name: c.name, dir: c.dir!, deps: c.deps, ecosystems: c.ecosystems, command: c.command, worker: c.worker, allFiles: files }), root));
+  return { skeleton, proposals };
 }
 
 const SERVICE = "service";
@@ -129,7 +140,9 @@ function summarizeDocs(files: string[]): string[] {
 
 export function scanRepository(root: string, limits: ScanLimits): ScanResult {
   const files = listFiles(root);
-  const { detections, infra } = detect(root, files);
+  const detected = detect(root, files);
+  const { detections, infra } = detected;
+  const { skeleton, proposals } = scanModel(root, files, detected);
   const order = (c: Fact["category"]) => CATEGORIES.indexOf(c);
   const facts = buildFacts(root, files, detections, infra)
     .filter((f) => f.evidence.length > 0)
@@ -141,5 +154,7 @@ export function scanRepository(root: string, limits: ScanLimits): ScanResult {
     candidates: findCandidates(detections, infra.migrations, files, limits.maxEvidencePerFact),
     docs: summarizeDocs(files),
     history: history(root),
+    skeleton,
+    proposals,
   };
 }

@@ -1,5 +1,8 @@
 /** Shared shapes of the repository scan. */
 
+import type { Proposal } from "./profiles/index.js";
+import type { Skeleton } from "./skeleton.js";
+
 export const CATEGORIES = ["component", "datastore", "integration", "execution", "mechanism"] as const;
 export type Category = (typeof CATEGORIES)[number];
 
@@ -35,4 +38,8 @@ export interface ScanResult {
   /** Documentation files worth reading (README, docs, ADRs). */
   docs: string[];
   history: { commits: number; first: string | null; last: string | null };
+  /** Containers, externals and relations derived deterministically (the model's starting point). */
+  skeleton: Skeleton;
+  /** Component candidates per code container, from the best-matching layout profile. */
+  proposals: Proposal[];
 }

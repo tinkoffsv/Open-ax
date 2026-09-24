@@ -10,6 +10,8 @@ import type { Decision } from "./memory/decisions.js";
 import type { Observation } from "./memory/observations.js";
 import { loadPrompt } from "./prompts.js";
 import type { GrepResult } from "./git.js";
+import type { Proposal } from "./scan/profiles/index.js";
+import type { Skeleton } from "./scan/skeleton.js";
 import { CATEGORIES, CATEGORY_LABELS, type Fact, type ScanResult } from "./scan/types.js";
 
 export const CLI = "npx @openax/cli";
@@ -251,8 +253,54 @@ function scanSections(result: ScanResult): string[] {
   return parts;
 }
 
+const pct = (n: number) => `${Math.round(n * 100)}%`;
+
+/** The deterministic skeleton: what `onboard` writes into the model before the agent starts. */
+export function skeletonSection(sk: Skeleton): string {
+  const lines: string[] = [];
+  lines.push(`System: ${sk.system.name}${sk.system.evidence.length ? ` (${sk.system.evidence.join(", ")})` : ""}`);
+  if (sk.containers.length) {
+    lines.push("", "Containers:");
+    for (const c of sk.containers) {
+      const kind = c.kind === "library" ? "library" : c.infrastructure ? "infrastructure" : c.worker ? "worker" : "container";
+      const where = c.dir === null ? "" : ` code: ${c.dir || "."}/`;
+      lines.push(`- ${c.name} [${kind}${c.technology ? `, ${c.technology}` : ""}]${where} (${c.evidence.join(", ")})`);
+    }
+  }
+  if (sk.externals.length) {
+    lines.push("", "External systems:");
+    for (const e of sk.externals) lines.push(`- ${e.name}${e.containers.length ? ` <- ${e.containers.join(", ")}` : ""} (${e.evidence.join(", ")})`);
+  }
+  if (sk.relations.length) {
+    lines.push("", "Relations:");
+    for (const r of sk.relations) lines.push(`- ${r.from} -> ${r.kind} ${r.to}${r.technology ? ` [${r.technology}]` : ""}${r.description ? `: ${r.description}` : ""}`);
+  }
+  return `## Skeleton (deterministic)\n\n${lines.join("\n")}`;
+}
+
+/** Component candidates per code container, from the best-matching layout profile. */
+export function proposalsSection(proposals: Proposal[]): string {
+  if (proposals.length === 0) return "## Component candidates\n\nNo code containers found.";
+  const parts: string[] = [];
+  for (const p of proposals) {
+    const lines = [`### ${p.container} — profile ${p.profile} (${pct(p.confidence)})`];
+    if (p.candidates.length === 0) lines.push("No candidates: read the container's code and add components with `model add`.");
+    for (const c of p.candidates) {
+      lines.push(`- **${c.name}** (${pct(c.confidence)})${c.note ? ` — ${c.note}` : ""}`);
+      if (c.entryPoints.length) lines.push(`  entry: ${c.entryPoints.join(", ")}`);
+      lines.push(`  evidence: ${c.evidence.join(", ")}`);
+    }
+    if (p.uncovered.length) {
+      const shown = p.uncovered.slice(0, 20);
+      lines.push(`Not covered by any candidate (${p.uncovered.length}): ${shown.join(", ")}${p.uncovered.length > shown.length ? ", ..." : ""}`);
+    }
+    parts.push(lines.join("\n"));
+  }
+  return `## Component candidates\n\n${parts.join("\n\n")}`;
+}
+
 export function renderScan(result: ScanResult): string {
-  return ["# OpenAX scan", ...scanSections(result)].join("\n\n");
+  return ["# OpenAX scan", ...scanSections(result), skeletonSection(result.skeleton), proposalsSection(result.proposals)].join("\n\n");
 }
 
 export function scanJson(result: ScanResult): Record<string, unknown> {
@@ -262,6 +310,11 @@ export function scanJson(result: ScanResult): Record<string, unknown> {
     candidates: result.candidates.map((c) => ({ ...c, verified: false })),
     docs: result.docs,
     history: result.history,
+    skeleton: result.skeleton,
+    proposals: result.proposals.map((p) => ({
+      ...p,
+      candidates: p.candidates.map(({ entryPoints, covered: _covered, ...c }) => ({ ...c, entry_points: entryPoints })),
+    })),
   };
 }
 

@@ -1,17 +1,25 @@
 /** Infrastructure evidence: compose services, Dockerfiles, CI/CD, deployment and schema migrations. */
 
 import { readFileSync } from "node:fs";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, normalize } from "node:path";
+import { manifestEcosystem } from "./manifests.js";
 
 export interface ComposeService {
   name: string;
   file: string;
   image?: string;
+  /** Dockerfile path when `build.dockerfile` is given, otherwise the build context (0.1 shape). */
   build?: string;
+  /** `build.context` (or a scalar `build:`), relative to the compose file's directory. */
+  context?: string;
+  /** `build.dockerfile`, relative to the context. */
+  dockerfile?: string;
   command?: string;
   /** Environment variable names (values are never kept). */
   env: string[];
   dependsOn: string[];
+  /** Host directories bind-mounted into the container (`./backend:/app` -> `backend`). */
+  volumes: string[];
 }
 
 export interface Finding {
@@ -48,6 +56,37 @@ const scalar = (value: string) => value.trim().replace(/^['"]|['"]$/g, "");
 /** `KEY=value`, `KEY: value` or `KEY` → `KEY`; the value is dropped immediately. */
 const envName = (entry: string) => /^['"]?([A-Za-z_][A-Za-z0-9_]*)/.exec(entry.trim())?.[1] ?? "";
 
+/** `./backend:/app` -> `backend`; named volumes and absolute host paths give "". */
+function hostDir(entry: string): string {
+  const host = scalar(entry).split(":")[0] ?? "";
+  if (!/^\.\.?\//.test(host)) return "";
+  return normalize(host).replace(/\/+$/, "").replace(/^\.$/, "");
+}
+
+/**
+ * Where a service's code lives, relative to the repository root: the Dockerfile's directory when
+ * `build.dockerfile` points into a subdirectory (monorepos build from the root with
+ * `context: .` and `dockerfile: backend/Dockerfile`), otherwise the build context; "" is the
+ * root, null means the service runs an image and has no code here. `files` lets a root context
+ * fall back to a bind-mounted directory that holds a manifest.
+ */
+export function sourceDir(service: ComposeService, files: string[] = []): string | null {
+  if (!service.build && !service.context && !service.dockerfile) return null;
+  const composeDir = dirname(service.file) === "." ? "" : dirname(service.file);
+  const context = service.context ?? (service.dockerfile ? "." : service.build ?? ".");
+  const clean = (p: string) => normalize(p).replace(/\/+$/, "").replace(/^\.$/, "");
+  const contextDir = clean(join(composeDir, context));
+  if (service.dockerfile) {
+    const dir = clean(dirname(join(contextDir || ".", service.dockerfile)));
+    if (dir) return dir;
+  }
+  if (!contextDir) {
+    const mounted = service.volumes.find((v) => files.some((f) => f.startsWith(v + "/") && manifestEcosystem(f) !== null));
+    if (mounted) return mounted;
+  }
+  return contextDir;
+}
+
 /** Indentation-aware scan of the top-level `services:` block. Unusual YAML degrades to fewer facts. */
 export function parseCompose(file: string, text: string): ComposeService[] {
   const services: ComposeService[] = [];
@@ -56,7 +95,7 @@ export function parseCompose(file: string, text: string): ComposeService[] {
   let serviceIndent = -1;
   let propIndent = -1;
   let current: ComposeService | null = null;
-  let block: "environment" | "depends_on" | "build" | null = null;
+  let block: "environment" | "depends_on" | "build" | "volumes" | null = null;
 
   for (const line of lines) {
     const indent = indentOf(line);
@@ -70,7 +109,7 @@ export function parseCompose(file: string, text: string): ComposeService[] {
     if (serviceIndent === -1) serviceIndent = indent;
     if (indent === serviceIndent) {
       const name = /^([A-Za-z0-9._-]+):\s*$/.exec(content)?.[1];
-      current = name ? { name, file, env: [], dependsOn: [] } : null;
+      current = name ? { name, file, env: [], dependsOn: [], volumes: [] } : null;
       if (current) services.push(current);
       propIndent = -1;
       block = null;
@@ -86,8 +125,13 @@ export function parseCompose(file: string, text: string): ComposeService[] {
       if (key === "image") current.image = scalar(value);
       else if (key === "command") current.command = scalar(value);
       else if (key === "build") {
-        if (value) current.build = scalar(value);
-        else block = "build";
+        if (value) {
+          current.build = scalar(value);
+          current.context = scalar(value);
+        } else block = "build";
+      } else if (key === "volumes") {
+        if (value.startsWith("[")) current.volumes.push(...value.replace(/^\[|\]$/g, "").split(",").map(hostDir).filter(Boolean));
+        else block = "volumes";
       } else if (key === "environment" || key === "depends_on") {
         if (value.startsWith("[")) {
           const items = value.replace(/^\[|\]$/g, "").split(",").map(scalar).filter(Boolean);
@@ -107,7 +151,15 @@ export function parseCompose(file: string, text: string): ComposeService[] {
       if (name && indent === propIndent + 2) current.dependsOn.push(name);
     } else if (block === "build") {
       const dockerfile = /^dockerfile:\s*(.+)$/.exec(content)?.[1];
-      if (dockerfile) current.build = scalar(dockerfile);
+      if (dockerfile) {
+        current.build = scalar(dockerfile);
+        current.dockerfile = scalar(dockerfile);
+      }
+      const context = /^context:\s*(.+)$/.exec(content)?.[1];
+      if (context) current.context = scalar(context);
+    } else if (block === "volumes" && content.startsWith("- ")) {
+      const dir = hostDir(item);
+      if (dir) current.volumes.push(dir);
     }
   }
   return services;
