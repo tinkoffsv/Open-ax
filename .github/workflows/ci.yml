@@ -28,6 +28,6 @@ jobs:
       - run: npm test
       - name: Smoke-test the packed CLI
         run: |
-          npm pack --pack-destination "$RUNNER_TEMP"
+          tarball="$RUNNER_TEMP/$(npm pack --silent --pack-destination "$RUNNER_TEMP")"
           cd "$RUNNER_TEMP"
-          npx --yes --package="$RUNNER_TEMP"/openax-*.tgz openax --version
+          npx --yes --package="$tarball" openax --version
