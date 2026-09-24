@@ -129,6 +129,11 @@ export const OPTIONS = {
   elements: { type: "string", multiple: true },
   open: { type: "boolean" },
   progress: { type: "boolean" },
+  // diagram
+  level: { type: "string" },
+  container: { type: "string" },
+  format: { type: "string" },
+  out: { type: "string" },
   // record / decisions
   inferred: { type: "boolean" },
   source: { type: "string" },

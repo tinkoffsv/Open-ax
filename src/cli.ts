@@ -8,6 +8,8 @@ import { parseArgs } from "node:util";
 import { prefilter, truncate } from "./analysis/significance.js";
 import { cmdModel, cmdQuestion, cmdScenario, confirmElements, elementView, MODEL_USAGE, QUESTION_USAGE, SCENARIO_USAGE } from "./commands/model.js";
 import { cmdOnboard, questionView } from "./commands/onboard.js";
+import { buildDiagrams, containersWithComponents, type DiagramFormat } from "./views/diagram.js";
+import { writeFileSync } from "node:fs";
 import { isInferred } from "./memory/decisions.js";
 import { formatEntry } from "./memory/scenarios.js";
 import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
@@ -51,6 +53,7 @@ Usage:
   openax scan [--json]
   openax onboard [--progress] [--json]
   openax why "<subject>" [--json]
+  openax diagram [--level container|component] [--container <id|name>] [--format mermaid|dsl] [--out <dir>] [--json]
   openax check [--staged | --base <ref>] [--json]
   openax context "<task>" [--diff] [--json]
   openax model <list|show|add|set|relate|confirm|remove> ...   (openax model --help)
@@ -67,6 +70,7 @@ Commands:
   scan        list components, data stores, integrations and possible ambiguities (no model)
   onboard     seed the model from the scan, then print the next batch to describe and the open questions
   why         print decisions, model elements, scenarios, questions and code mentions that explain a subject
+  diagram     C4 diagrams generated from the model: Mermaid (one per system and per container) or Structurizr DSL
   check       print the current git diff and recorded decisions for the agent to review
   context     print recorded decisions for the agent to apply to a task
   model       read and write the architecture model (.openax/model/): elements, purposes, relations
@@ -290,6 +294,42 @@ function cmdContext(flags: Flags, positionals: string[], s: Session): number {
   };
   if (flags.json) s.json(contextJson(packet));
   else s.out(renderContext(packet));
+  return EXIT_OK;
+}
+
+// --- diagram ----------------------------------------------------------------------------------
+
+function cmdDiagram(flags: Flags, s: Session): number {
+  const m = s.load();
+  const elements = m.model.all();
+  if (!elements.some((e) => e.kind === "system")) throw new OpenAXError(`The model is empty. Run \`${CLI} onboard\` first.`);
+  const format = (flags.format ?? "mermaid") as DiagramFormat;
+  if (format !== "mermaid" && format !== "dsl") throw new OpenAXError("--format must be mermaid or dsl.");
+  const level = flags.level ?? (flags.container ? "component" : "all");
+  if (level !== "container" && level !== "component" && level !== "all") throw new OpenAXError("--level must be container or component.");
+  let container: ReturnType<typeof m.model.require> | undefined;
+  if (flags.container) {
+    container = m.model.require(flags.container);
+    if (!elements.some((e) => e.parent === container!.id)) throw new OpenAXError(`${container.id} ${container.name} has no components${container.technology ? ` (${container.technology})` : ""}.`);
+  } else if (level === "component" && containersWithComponents(elements).length === 0) {
+    throw new OpenAXError("No container has components yet. Describe them with `model add`/`model set` or run `onboard`.");
+  }
+  const diagrams = buildDiagrams(elements, { level, container, format });
+  if (flags.out) {
+    mkdirSync(flags.out, { recursive: true });
+    for (const d of diagrams) {
+      const path = join(flags.out, d.file);
+      writeFileSync(path, d.text, "utf8");
+      s.out(`  ${rel(m.root, path) || path}: ${d.title}`);
+    }
+    return EXIT_OK;
+  }
+  if (flags.json) {
+    s.json({ diagrams: diagrams.map((d) => ({ level: d.level, title: d.title, format: d.format, file: d.file, text: d.text })) });
+    return EXIT_OK;
+  }
+  const fence = format === "mermaid" ? "mermaid" : "";
+  s.out(diagrams.map((d) => `## ${d.title}\n\n\`\`\`${fence}\n${d.text.trimEnd()}\n\`\`\``).join("\n\n"));
   return EXIT_OK;
 }
 
@@ -536,6 +576,8 @@ export function main(argv: string[], opts: MainOptions = {}): number {
         return cmdScenario(flags, rest, s);
       case "question":
         return cmdQuestion(flags, rest, s);
+      case "diagram":
+        return cmdDiagram(flags, s);
       case "observe":
         return cmdObserve(flags, s);
       case "record":

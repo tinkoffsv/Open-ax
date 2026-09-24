@@ -238,7 +238,7 @@ export function buildSkeleton(root: string, files: string[], detections: Detecti
     const users = codeContainers
       .filter((c) => d.source.some((f) => inDir(f, c.dir!)) || d.deps.some((f) => inDir(f, c.dir!)) || d.env.some((e) => c.env.includes(e)))
       .map((c) => c.name);
-    externals.push({ name: d.tech.name, technology: d.tech.detail ?? "", evidence: externalEvidence(d), containers: users });
+    externals.push({ name: d.tech.name, technology: d.tech.detail ?? d.tech.purpose ?? "", evidence: externalEvidence(d), containers: users });
     for (const user of users) {
       const inCode = d.source.some((f) => inDir(f, codeContainers.find((c) => c.name === user)!.dir!));
       relations.push({ from: user, to: d.tech.name, kind: "calls", technology: "", description: inCode ? "referenced in code" : `configured via ${d.env.slice(0, 2).join(", ")}` });
