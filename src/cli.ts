@@ -8,8 +8,10 @@ import { parseArgs } from "node:util";
 import { prefilter, truncate } from "./analysis/significance.js";
 import { cmdModel, cmdQuestion, cmdScenario, confirmElements, elementView, MODEL_USAGE, QUESTION_USAGE, SCENARIO_USAGE } from "./commands/model.js";
 import { cmdOnboard, questionView } from "./commands/onboard.js";
+import { cmdHook, cmdLint } from "./commands/maintain.js";
+import { drift } from "./analysis/drift.js";
+import { existsSync, readFileSync as readSync, writeFileSync } from "node:fs";
 import { buildDiagrams, containersWithComponents, type DiagramFormat } from "./views/diagram.js";
-import { writeFileSync } from "node:fs";
 import { isInferred } from "./memory/decisions.js";
 import { formatEntry } from "./memory/scenarios.js";
 import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
@@ -22,6 +24,10 @@ import { candidates, limits, memoryCandidates, mentions } from "./memory/retriev
 import {
   checkJson,
   CLI,
+  describeInstructions,
+  isEmptyContext,
+  renderDescribe,
+  renderQuietCheck,
   contextJson,
   observationView,
   onboardJson,
@@ -48,14 +54,18 @@ OpenAX never calls a model. The coding agent that runs it (Claude Code, Codex, .
 does the reasoning; OpenAX supplies the data and instructions and records the result.
 
 Usage:
-  openax init [--tools ${TOOLS.join(",")}]
+  openax init [--tools ${TOOLS.join(",")}] [--no-hook]
   openax update
   openax scan [--json]
   openax onboard [--progress] [--json]
   openax why "<subject>" [--json]
   openax diagram [--level container|component] [--container <id|name>] [--format mermaid|dsl] [--out <dir>] [--json]
-  openax check [--staged | --base <ref>] [--json]
+  openax check [--staged | --base <ref>] [--quiet] [--json]
+  openax lint [--record] [--json]
+  openax hook stop
   openax context "<task>" [--diff] [--json]
+  openax scenario "<name|SCN-id>" [--json]
+  openax describe [--json] | --write-readme <file>
   openax model <list|show|add|set|relate|confirm|remove> ...   (openax model --help)
   openax scenario <add|list> ...                                (openax scenario --help)
   openax question <add|list|answer> ...                         (openax question --help)
@@ -71,8 +81,12 @@ Commands:
   onboard     seed the model from the scan, then print the next batch to describe and the open questions
   why         print decisions, model elements, scenarios, questions and code mentions that explain a subject
   diagram     C4 diagrams generated from the model: Mermaid (one per system and per container) or Structurizr DSL
-  check       print the current git diff and recorded decisions for the agent to review
-  context     print recorded decisions for the agent to apply to a task
+  check       print the current git diff, recorded decisions and model drift for the agent to review
+              (--quiet: nothing on trivial diffs, otherwise a short packet; used by the Stop hook)
+  lint        deterministic smells from the model and the scan (--record stores them as observations)
+  hook        Claude Code hook entry point (hook stop), installed by init --tools claude
+  context     what the code cannot show for a task: relevant decisions, scenarios, open questions
+  describe    the model for the agent to write an application description on demand (--write-readme inserts it)
   model       read and write the architecture model (.openax/model/): elements, purposes, relations
   scenario    the scenario registry (.openax/scenarios/): business scenarios elements are tagged with
   question    the question queue (.openax/questions/): what only the developer can answer
@@ -106,9 +120,10 @@ Exit codes: 0 ok, 2 error.`;
 
 // --- init / update ----------------------------------------------------------------------------
 
-function installTools(root: string, tools: Tool[], s: Session): void {
-  writeConfig(root, tools);
-  for (const [path, result] of agents.install(root, tools)) s.out(`  ${path}: ${result}`);
+function installTools(root: string, tools: Tool[], s: Session, noHook = false): void {
+  const hook = noHook ? false : (isInitialized(root) ? loadConfig(root).hook : true);
+  writeConfig(root, tools, noHook ? { hook: false } : {});
+  for (const [path, result] of agents.install(root, tools, { hook })) s.out(`  ${path}: ${result}`);
 }
 
 function cmdInit(flags: Flags, s: Session): number {
@@ -122,7 +137,7 @@ function cmdInit(flags: Flags, s: Session): number {
   s.out(`  memory: ${OPENAX_DIR}/ (${MEMORY_DIRS.join(", ")})`);
   s.out(`  tools:  ${tools.join(", ") || "(none)"}`);
   if (existed) for (const line of migrated) s.out(line);
-  installTools(root, tools, s);
+  installTools(root, tools, s, flags["no-hook"] === true);
   s.out("");
   for (const line of baseline(scanWithLimits(root))) s.out(line);
   s.out("\nNo API key needed: your coding agent does the analysis.");
@@ -238,11 +253,23 @@ function diffFlags(flags: Flags): string {
   return flags.staged ? "--staged" : "";
 }
 
+const QUIET_LINES = 40;
+
+/** The quiet packet as text, "" when nothing needs the agent's attention. Used by `check --quiet` and the Stop hook. */
+function quietCheck(s: Session): string {
+  const out: string[] = [];
+  const quiet = new Session({ cwd: s.opts.cwd, out: (l) => out.push(l), err: s.err });
+  cmdCheck({ quiet: true }, quiet);
+  return out.join("\n");
+}
+
 function cmdCheck(flags: Flags, s: Session): number {
-  const { root, config, store } = s.load();
+  const m = s.load();
+  const { root, config, store, model } = m;
   const diff = getDiff(root, { base: flags.base, staged: flags.staged });
   const skipped = isEmpty(diff) ? "no changes" : prefilter(diff.files);
   if (skipped) {
+    if (flags.quiet) return EXIT_OK;
     if (flags.json) s.json({ status: "skipped", reason: skipped });
     else s.out(skipped === "no changes" ? "No changes to analyze." : `Nothing to review: ${skipped}.`);
     return EXIT_OK;
@@ -259,7 +286,14 @@ function cmdCheck(flags: Flags, s: Session): number {
     decisions: candidates(diff.files.join(" ") + "\n" + text, active).map((d) => view(root, d)),
     totalDecisions: active.length,
     diffFlags: diffFlags(flags),
+    drift: model.system() ? drift(root, model.all(), scanWithLimits(root)) : [],
+    modelled: model.system() !== undefined,
   };
+  if (flags.quiet) {
+    const short = renderQuietCheck(packet, config.maxQuietLines);
+    if (short) s.out(short);
+    return EXIT_OK;
+  }
   if (flags.json) s.json(checkJson(packet));
   else s.out(renderCheck(packet));
   return EXIT_OK;
@@ -268,32 +302,65 @@ function cmdCheck(flags: Flags, s: Session): number {
 // --- context ----------------------------------------------------------------------------------
 
 function cmdContext(flags: Flags, positionals: string[], s: Session): number {
-  const { root, store, observations } = s.load();
   const task = positionals.join(" ").trim();
-  if (!task && !flags.diff) {
-    throw new OpenAXError('Provide a task, e.g. `openax context "Add invoice email delivery"`, or use --diff.');
-  }
-  const active = store.active();
-  // Answered questions live on in the decisions that resolved them.
-  const observed = observations.all().filter((o) => !(o.kind === "ambiguity" && o.status === "resolved"));
-  if (active.length === 0 && observed.length === 0) {
-    if (flags.json) s.json({ status: "empty", decisions: [], observations: [] });
-    else s.out("No architectural decisions recorded yet.");
-    return EXIT_OK;
-  }
-
+  if (!task && !flags.diff) throw new OpenAXError('Describe the task, e.g. `openax context "add PDF export"`, or pass --diff.');
+  const m = s.load();
+  const { root, store, model, scenarios, questions } = m;
   const files = flags.diff ? getDiff(root).files : [];
-  const kept = memoryCandidates([task, ...files].join("\n"), active, observed);
+  const elements = model.all();
+  const query = [task, ...files].join("\n");
+  // Elements the task names, or whose evidence the changed files fall under.
+  const touched = elements.filter((e) => e.kind !== "system" && (mentions(e.name, task) || files.some((f) => e.evidence.some((ev) => f === ev || (ev.endsWith("/") && f.startsWith(ev)) || f.startsWith(ev + "/")))));
+  const touchedIds = new Set(touched.map((e) => e.id));
+  const current = store.all().filter((d) => d.status === "active" || isInferred(d));
+  const relevant = current.filter((d) => d.elements.some((id) => touchedIds.has(id)));
+  const ranked = candidates(query, current.filter((d) => !relevant.includes(d)));
+  const kept = [...relevant, ...ranked];
+  const allScenarios = scenarios.all();
   const packet = {
     task,
     files,
-    decisions: kept.decisions.map((d) => view(root, d)),
-    totalDecisions: active.length,
-    observations: kept.observations.map((o) => observationView(root, o)),
-    totalObservations: observed.length,
+    elements: touched.map((e) => elementView(root, e)),
+    decisions: kept.filter((d) => d.status === "active").map((d) => view(root, d)),
+    inferred: kept.filter(isInferred).map((d) => view(root, d)),
+    totalDecisions: current.filter((d) => d.status === "active").length,
+    scenarios: allScenarios
+      .filter((sc) => mentions(sc.name, task) || elements.some((e) => touchedIds.has(e.id) && e.scenarios.includes(sc.id)))
+      .map((sc) => ({ id: sc.id, name: sc.name, description: sc.description, entry: formatEntry(sc.entry), elements: elements.filter((e) => e.scenarios.includes(sc.id)).map((e) => e.name) })),
+    questions: questions.open().filter((q) => q.elements.some((id) => touchedIds.has(id)) || mentions(task, q.text)).map((q) => questionView(root, q)),
   };
   if (flags.json) s.json(contextJson(packet));
+  else if (isEmptyContext(packet)) s.out(`Nothing recorded applies to this task: no decision, scenario or open question. Proceed; run \`${CLI} check\` after architecturally significant changes.`);
   else s.out(renderContext(packet));
+  return EXIT_OK;
+}
+
+// --- describe -----------------------------------------------------------------------------------
+
+const DESCRIBE_START = "<!-- openax:describe:start -->";
+const DESCRIBE_END = "<!-- openax:describe:end -->";
+
+function cmdDescribe(flags: Flags, s: Session): number {
+  const m = s.load();
+  if (!m.model.system()) throw new OpenAXError(`The model is empty. Run \`${CLI} onboard\` first.`);
+  if (flags["write-readme"]) {
+    const source = flags["write-readme"];
+    if (!existsSync(join(m.root, source)) && !existsSync(source)) throw new OpenAXError(`File ${source} not found.`);
+    const prose = readFileSync(existsSync(join(m.root, source)) ? join(m.root, source) : source, "utf8").trim();
+    const readme = join(m.root, "README.md");
+    const block = `${DESCRIBE_START}\n${prose}\n${DESCRIBE_END}`;
+    let text = existsSync(readme) ? readFileSync(readme, "utf8") : "";
+    const a = text.indexOf(DESCRIBE_START);
+    const b = text.indexOf(DESCRIBE_END);
+    if (a !== -1 && b > a) text = text.slice(0, a) + block + text.slice(b + DESCRIBE_END.length);
+    else text = text + (text && !text.endsWith("\n\n") ? (text.endsWith("\n") ? "\n" : "\n\n") : "") + block + "\n";
+    writeFileSync(readme, text, "utf8");
+    s.out(`README.md: description ${a !== -1 ? "replaced" : "added"} between ${DESCRIBE_START} and ${DESCRIBE_END}.`);
+    return EXIT_OK;
+  }
+  const overview = readFileSync(refreshProject(m), "utf8");
+  if (flags.json) s.json({ status: "review", instructions: describeInstructions(), overview, readme_markers: [DESCRIBE_START, DESCRIBE_END] });
+  else s.out(renderDescribe(overview));
   return EXIT_OK;
 }
 
@@ -578,6 +645,14 @@ export function main(argv: string[], opts: MainOptions = {}): number {
         return cmdQuestion(flags, rest, s);
       case "diagram":
         return cmdDiagram(flags, s);
+      case "describe":
+        return cmdDescribe(flags, s);
+      case "lint": {
+        let cached: ScanResult | null = null;
+        return cmdLint(flags, s, () => (cached ??= scanWithLimits(s.root())));
+      }
+      case "hook":
+        return cmdHook(rest, s, () => quietCheck(s), () => (opts.stdin !== undefined ? opts.stdin : readStdin()));
       case "observe":
         return cmdObserve(flags, s);
       case "record":
@@ -593,6 +668,16 @@ export function main(argv: string[], opts: MainOptions = {}): number {
       return EXIT_ERROR;
     }
     throw err;
+  }
+}
+
+/** Hook input arrives on a pipe; a terminal has none to give, so never block waiting for it. */
+function readStdin(): string {
+  if (process.stdin.isTTY) return "";
+  try {
+    return readSync(0, "utf8");
+  } catch {
+    return "";
   }
 }
 

@@ -220,6 +220,14 @@ export function buildSkeleton(root: string, files: string[], detections: Detecti
     });
   }
 
+  // A container whose manifest lists a library package depends on it (web -> blocks via file:../blocks).
+  for (const lib of containers.filter((c) => c.kind === "library")) {
+    for (const c of containers) {
+      if (c.name === lib.name || c.dir === null) continue;
+      if (c.deps.some((d) => d === lib.name || d.endsWith(`/${lib.name}`))) relations.push({ from: c.name, to: lib.name, kind: "depends_on", technology: "", description: "package dependency" });
+    }
+  }
+
   // Datastores detected without a compose service (managed or external instances) are still containers.
   for (const d of detections) {
     if (d.tech.category !== "datastore" || d.tech.purpose === "object-storage") continue;

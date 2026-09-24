@@ -154,6 +154,7 @@ export function scanRepository(root: string, limits: ScanLimits): ScanResult {
     candidates: findCandidates(detections, infra.migrations, files, limits.maxEvidencePerFact),
     docs: summarizeDocs(files),
     history: history(root),
+    files,
     skeleton,
     proposals,
   };

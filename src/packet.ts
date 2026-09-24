@@ -10,6 +10,7 @@ import type { Decision } from "./memory/decisions.js";
 import type { Observation } from "./memory/observations.js";
 import { loadPrompt } from "./prompts.js";
 import type { GrepResult } from "./git.js";
+import type { DriftItem } from "./analysis/drift.js";
 import type { ElementView } from "./commands/model.js";
 import type { ContainerStatus, QuestionView, ScenarioCandidate } from "./commands/onboard.js";
 import type { Proposal } from "./scan/profiles/index.js";
@@ -135,6 +136,16 @@ export interface CheckPacket {
   totalDecisions: number;
   /** Diff-selection flags the agent must repeat on `record`, e.g. `--staged`. */
   diffFlags: string;
+  /** What the scan found that the model lacks (empty before onboarding). */
+  drift: DriftItem[];
+  modelled: boolean;
+}
+
+export function driftSection(drift: DriftItem[], modelled: boolean): string {
+  if (!modelled) return `## Model drift\n\nNo architecture model yet (\`${CLI} onboard\` builds it), so drift is not checked.`;
+  if (drift.length === 0) return "## Model drift\n\nNone: the model covers what the scan finds.";
+  const lines = drift.map((d) => `- ${d.description}\n  ${d.command}`);
+  return `## Model drift (the model lacks what the scan found)\n\nUpdate the model, do not only record decisions: run the command under each item after checking it against the code, then describe new elements with \`${CLI} model set <id> --purpose ...\`.\n\n${lines.join("\n")}`;
 }
 
 export function checkSteps(diffFlags: string): string {
@@ -168,12 +179,35 @@ export function renderCheck(p: CheckPacket): string {
     `## Changed files\n\n${p.files.map((f) => `- ${f}${p.untracked.includes(f) ? " (new, untracked)" : ""}`).join("\n")}`,
     `## Diff${p.truncated ? " (truncated)" : ""}\n\n\`\`\`diff\n${p.diff.trimEnd()}\n\`\`\``,
     decidedSection(p.decisions, p.totalDecisions),
+    driftSection(p.drift, p.modelled),
   ];
   return parts.join("\n\n");
 }
 
+/**
+ * The quiet packet for hooks: no diff, no prompts; changed files, drift and the decisions that
+ * share keywords with the change, capped at `maxLines`. Empty when there is nothing to say.
+ */
+export function renderQuietCheck(p: CheckPacket, maxLines: number): string {
+  if (p.decisions.length === 0 && p.drift.length === 0) return "";
+  const lines = [`OpenAX check: ${p.files.length} changed file${p.files.length === 1 ? "" : "s"} (${p.files.slice(0, 6).join(", ")}${p.files.length > 6 ? ", ..." : ""}).`];
+  if (p.decisions.length) {
+    lines.push(`Decisions that share keywords with this change (check for conflicts, ask the developer before contradicting one):`);
+    for (const d of p.decisions) lines.push(`- ${d.id} ${d.title}${d.status !== "active" ? ` [${d.status}]` : ""}: ${d.why.split("\n")[0]}`);
+  }
+  if (p.drift.length) {
+    lines.push(`Model drift (update the model with the commands, after checking them against the code):`);
+    for (const d of p.drift) lines.push(`- ${d.description}`, `  ${d.command}`);
+  }
+  lines.push(`Full packet: ${CLI} check${p.diffFlags ? ` ${p.diffFlags}` : ""}`);
+  if (lines.length <= maxLines) return lines.join("\n");
+  return [...lines.slice(0, maxLines - 1), `(${lines.length - maxLines + 1} more lines; run ${CLI} check${p.diffFlags ? ` ${p.diffFlags}` : ""})`].join("\n");
+}
+
 export function checkJson(p: CheckPacket): Record<string, unknown> {
   return {
+    drift: p.drift,
+    modelled: p.modelled,
     status: "review",
     instructions: [
       checkSteps(p.diffFlags),
@@ -195,34 +229,83 @@ export interface ContextPacket {
   task: string;
   files: string[];
   decisions: DecisionView[];
+  inferred: DecisionView[];
   totalDecisions: number;
-  observations: ObservationView[];
-  totalObservations: number;
+  /** Elements the task or the changed files touch. */
+  elements: ElementView[];
+  scenarios: { id: string; name: string; description: string; entry: string; elements: string[] }[];
+  questions: QuestionView[];
 }
 
 export function contextInstructions(): string {
   return `## What to do\n\n${loadPrompt("context")}`;
 }
 
+export function isEmptyContext(p: ContextPacket): boolean {
+  return p.decisions.length + p.inferred.length + p.scenarios.length + p.questions.length === 0;
+}
+
 export function renderContext(p: ContextPacket): string {
   const parts = ["# OpenAX context", contextInstructions()];
   if (p.task) parts.push(`## Task\n\n${p.task}`);
   if (p.files.length) parts.push(`## Files currently changed\n\n${p.files.map((f) => `- ${f}`).join("\n")}`);
-  parts.push(decidedSection(p.decisions, p.totalDecisions), observedSection(p.observations, p.totalObservations));
+  if (p.elements.length) parts.push(`## Elements the task touches\n\n${p.elements.map((e) => `- ${e.id} ${e.name} [${e.kind}${e.parent ? ` in ${e.parent}` : ""}]${e.purpose ? ` — ${e.purpose.split("\n")[0]}` : ""}`).join("\n")}`);
+  parts.push(decidedSection(p.decisions, p.totalDecisions));
+  if (p.inferred.length) parts.push(`## Inferred decisions (derived from history, not confirmed)\n\n${renderDecisions(p.inferred)}`);
+  if (p.scenarios.length) {
+    parts.push(`## Scenarios the task passes through\n\n${p.scenarios.map((sc) => `- ${sc.id}: ${sc.name}${sc.description ? ` — ${sc.description}` : ""}${sc.entry ? ` (${sc.entry})` : ""}${sc.elements.length ? `; implemented by ${sc.elements.join(", ")}` : ""}`).join("\n")}`);
+  }
+  if (p.questions.length) parts.push(`## Open questions about these elements\n\n${p.questions.map((q) => `- ${q.id} (${q.elements.join(", ")}): ${q.text}`).join("\n")}`);
   return parts.join("\n\n");
 }
 
 export function contextJson(p: ContextPacket): Record<string, unknown> {
   return {
-    status: "review",
+    status: isEmptyContext(p) ? "empty" : "review",
     instructions: contextInstructions(),
     task: p.task,
     files: p.files,
+    elements: p.elements,
     decisions: p.decisions,
+    inferred: p.inferred,
     total_decisions: p.totalDecisions,
-    observations: p.observations,
-    total_observations: p.totalObservations,
+    scenarios: p.scenarios,
+    questions: p.questions,
   };
+}
+
+// --- scenario and describe ---------------------------------------------------------------------
+
+export interface ScenarioPacket {
+  id: string;
+  name: string;
+  description: string;
+  entry: string;
+  elements: WhyElement[];
+  path: string;
+}
+
+export function scenarioInstructions(): string {
+  return `## What to do\n\n${loadPrompt("scenario")}`;
+}
+
+export function renderScenario(p: ScenarioPacket): string {
+  const parts = [`# OpenAX scenario: ${p.name} (${p.id})`, scenarioInstructions()];
+  parts.push(`## Scenario\n\n${p.description || "(no description)"}\n\nEntry point: ${p.entry || "not recorded"}\nSource: ${p.path}`);
+  parts.push(p.elements.length ? `## Elements tagged with this scenario\n\n${renderWhyElements(p.elements)}` : `## Elements tagged with this scenario\n\nNone yet: tag them with \`${CLI} model set <id> --scenario ${p.id}\`.`);
+  return parts.join("\n\n");
+}
+
+export function scenarioJson(p: ScenarioPacket): Record<string, unknown> {
+  return { status: "review", instructions: scenarioInstructions(), scenario: { id: p.id, name: p.name, description: p.description, entry: p.entry, path: p.path }, elements: p.elements };
+}
+
+export function describeInstructions(): string {
+  return `## What to do\n\n${loadPrompt("describe")}`;
+}
+
+export function renderDescribe(overview: string): string {
+  return ["# OpenAX describe", describeInstructions(), `## The model (generated project.md)\n\n${overview.trim()}`].join("\n\n");
 }
 
 // --- scan -------------------------------------------------------------------------------------

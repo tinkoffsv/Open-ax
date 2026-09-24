@@ -1,0 +1,6 @@
+Write a description of this application from the model below: what it is for, what it consists of, which business scenarios it implements and how, and the decisions that shaped it. The model is the truth; add nothing that is not in it or in the files it cites.
+
+- Start from the system's purpose, in the owner's words. Then the containers with their purposes, then the scenarios: for each, the entry point and the components that implement it. Close with the recorded decisions (DECIDED) and, separately marked, the inferred ones that still await confirmation.
+- Prose, for a developer joining the project: a few paragraphs and one list per section, not a table dump. Skip elements without a purpose or mention them as "not described yet".
+- Say "it appears" only for what is OBSERVED; a decision recorded from the owner's words needs no hedging.
+- The text is not stored by OpenAX: it is generated on demand so it never goes stale. When the developer asks for it in the README, write it to a file and run `npx @openax/cli describe --write-readme <file>`: it goes between the `<!-- openax:describe:start -->` and `<!-- openax:describe:end -->` markers (added at the end if missing) and can be regenerated the same way.

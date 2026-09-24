@@ -66,6 +66,7 @@ const isLogic = (f: string) => !/(^|\/)(core|config|db|database|deps|dependencie
 function routerCandidates(root: string, s: ContainerSource): ComponentCandidate[] {
   const fileSet = new Set(s.files);
   const mounted = mounts(root, s);
+  const routerSet = new Set(routerFiles(root, s));
   const byModule = new Map<string, { files: string[]; prefix: string; tag: string; entries: string[] }>();
   for (const f of routerFiles(root, s)) {
     const text = readCode(root, f);
@@ -88,7 +89,8 @@ function routerCandidates(root: string, s: ContainerSource): ComponentCandidate[
   const counts = new Map<string, number>();
   for (const name of preferred.values()) counts.set(name, (counts.get(name) ?? 0) + 1);
   for (const [mod, g] of byModule) {
-    const logic = [...new Set(g.files.flatMap((f) => importsOf(root, s.dir, f, fileSet)))].filter(isLogic).sort();
+    // Another router module is a dependency between components, not evidence of this one.
+    const logic = [...new Set(g.files.flatMap((f) => importsOf(root, s.dir, f, fileSet)))].filter((f) => isLogic(f) && !routerSet.has(f)).sort();
     // Two routers under one prefix (projects, projects/{id}/media, projects/{id}/settings) get their module names.
     const name = counts.get(preferred.get(mod)!)! > 1 ? humanize(mod) : preferred.get(mod)!;
     out.push({

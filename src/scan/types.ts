@@ -38,6 +38,8 @@ export interface ScanResult {
   /** Documentation files worth reading (README, docs, ADRs). */
   docs: string[];
   history: { commits: number; first: string | null; last: string | null };
+  /** Every file the scan looked at (tracked and untracked, ignored excluded). */
+  files: string[];
   /** Containers, externals and relations derived deterministically (the model's starting point). */
   skeleton: Skeleton;
   /** Component candidates per code container, from the best-matching layout profile. */

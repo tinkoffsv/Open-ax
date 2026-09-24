@@ -30,6 +30,37 @@ ${END}`;
 
 export const SKILLS = ["openax-onboard", "openax-context", "openax-check", "openax-why"] as const;
 
+/** The Claude Code Stop hook: one quiet check per agent turn (not PostToolUse), silent on trivial diffs. */
+export const HOOK_COMMAND = `${CLI} hook stop`;
+export const SETTINGS_FILE = ".claude/settings.json";
+
+interface HookEntry {
+  type: string;
+  command: string;
+}
+
+/** Add the Stop hook to `.claude/settings.json`, keeping every other setting and hook; never duplicates. */
+export function installHook(root: string): InstallResult {
+  const path = join(root, SETTINGS_FILE);
+  let settings: Record<string, any> = {};
+  if (existsSync(path)) {
+    try {
+      settings = JSON.parse(readFileSync(path, "utf8"));
+    } catch {
+      throw new Error(`${SETTINGS_FILE} is not valid JSON; fix it or remove it, then run \`${CLI} update\`.`);
+    }
+  }
+  const hooks = (settings.hooks ??= {});
+  const stop: { matcher?: string; hooks: HookEntry[] }[] = (hooks.Stop ??= []);
+  const present = stop.some((group) => Array.isArray(group.hooks) && group.hooks.some((h) => h.command === HOOK_COMMAND));
+  if (present) return "unchanged";
+  stop.push({ hooks: [{ type: "command", command: HOOK_COMMAND }] });
+  const existed = existsSync(path);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, JSON.stringify(settings, null, 2) + "\n", "utf8");
+  return existed ? "updated" : "created";
+}
+
 export type InstallResult = "created" | "added" | "updated" | "unchanged";
 
 function writeIfChanged(path: string, content: string): InstallResult {
@@ -74,8 +105,8 @@ export function targets(tool: Tool): { section: string; skillsDir: string | null
   }
 }
 
-/** Install the section and skills for each tool. Returns one line per file touched. */
-export function install(root: string, tools: Tool[]): [string, InstallResult][] {
+/** Install the section, skills and (for Claude Code) the Stop hook for each tool. Returns one line per file touched. */
+export function install(root: string, tools: Tool[], opts: { hook?: boolean } = {}): [string, InstallResult][] {
   const results = new Map<string, InstallResult>();
   for (const tool of tools) {
     const { section, skillsDir } = targets(tool);
@@ -85,6 +116,7 @@ export function install(root: string, tools: Tool[]): [string, InstallResult][] 
       const path = `${skillsDir}/${name}/SKILL.md`;
       results.set(path, writeIfChanged(join(root, path), skillTemplate(name)));
     }
+    if (tool === "claude" && opts.hook !== false) results.set(`${SETTINGS_FILE} (Stop hook)`, installHook(root));
   }
   return [...results];
 }

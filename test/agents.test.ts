@@ -48,6 +48,7 @@ it("installs sections and skills per tool", () => {
   expect(results).toEqual({
     "CLAUDE.md": "created",
     ...Object.fromEntries(skills.map((n) => [`.claude/skills/${n}/SKILL.md`, "created"])),
+    ".claude/settings.json (Stop hook)": "created",
     "AGENTS.md": "created",
     ...Object.fromEntries(skills.map((n) => [`.agents/skills/${n}/SKILL.md`, "created"])),
   });

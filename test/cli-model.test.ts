@@ -123,7 +123,7 @@ describe("openax scenario", () => {
     expect(run(repo, ["scenario", "list"]).out).toContain("(Billing)");
     expect(JSON.parse(run(repo, ["scenario", "list", "--json"]).out).scenarios[0]).toMatchObject({ id: "SCN-0001", entry: "route:POST /api/v1/billing/checkout", elements: ["CMP-0001"] });
     expect(project(repo)).toContain("## Scenarios\n\n- [SCN-0001: Checkout](scenarios/SCN-0001-checkout.md) — A customer pays for a plan. Entry: `route:POST /api/v1/billing/checkout`. Implemented by: Billing.");
-    expect(run(repo, ["scenario", "nope"]).err).toContain("Unknown scenario subcommand");
+    expect(run(repo, ["scenario", "nope"]).err).toContain('Unknown scenario "nope". Known: SCN-0001 Checkout.');
   });
 });
 

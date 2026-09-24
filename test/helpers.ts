@@ -35,6 +35,6 @@ export function write(repo: string, name: string, content: string): void {
 export function run(repo: string, argv: string[]) {
   const out: string[] = [];
   const err: string[] = [];
-  const code = main(argv, { cwd: repo, out: (l) => out.push(l), err: (l) => err.push(l) });
+  const code = main(argv, { cwd: repo, out: (l) => out.push(l), err: (l) => err.push(l), stdin: "" });
   return { code, out: out.join("\n"), err: err.join("\n") };
 }

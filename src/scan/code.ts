@@ -3,17 +3,26 @@
  * Shared by the layout profiles; bounded and forgiving (unresolved imports are dropped).
  */
 
-import { readFileSync } from "node:fs";
+import { readFileSync, statSync } from "node:fs";
 import { basename, dirname, join, normalize } from "node:path";
 import { isCodeFile, isTestPath } from "./sources.js";
 
 const MAX_CODE_BYTES = 400_000;
-const cache = new Map<string, string>();
+const cache = new Map<string, { stamp: string; text: string }>();
 
+/** Cached by path and invalidated by size and mtime, so a long-lived process (tests, watchers) never sees stale code. */
 export function readCode(root: string, file: string): string {
   const key = join(root, file);
+  let stamp = "";
+  try {
+    const st = statSync(key);
+    stamp = `${st.size}:${st.mtimeMs}`;
+  } catch {
+    cache.delete(key);
+    return "";
+  }
   const hit = cache.get(key);
-  if (hit !== undefined) return hit;
+  if (hit && hit.stamp === stamp) return hit.text;
   let text = "";
   try {
     text = readFileSync(key, "utf8");
@@ -21,7 +30,7 @@ export function readCode(root: string, file: string): string {
   } catch {
     text = "";
   }
-  cache.set(key, text);
+  cache.set(key, { stamp, text });
   return text;
 }
 

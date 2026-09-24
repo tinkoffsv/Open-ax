@@ -170,10 +170,10 @@ describe("openax", () => {
     run(repo, ["init"]);
     r = run(repo, ["context"]);
     expect(r.code).toBe(EXIT_ERROR);
-    expect(r.err).toContain("Provide a task");
+    expect(r.err).toContain("Describe the task");
 
     r = run(repo, ["context", "anything"]);
-    expect(r.out).toContain("No architectural decisions recorded yet.");
+    expect(r.out).toContain("Nothing recorded applies to this task");
 
     r = run(repo, ["frobnicate"]);
     expect(r.code).toBe(EXIT_ERROR);

@@ -39,6 +39,8 @@ export const DEFAULT_LIMITS = {
   max_why_hits: 40,
   // Elements `onboard` hands the agent per run.
   onboard_batch: 12,
+  // Lines of the `check --quiet` packet (the Stop hook) before it points at the full command.
+  max_quiet_lines: 40,
 };
 
 export interface Config {
@@ -51,6 +53,9 @@ export interface Config {
   maxEvidencePerFact: number;
   maxWhyHits: number;
   onboardBatch: number;
+  maxQuietLines: number;
+  /** Install the Claude Code Stop hook with `init --tools claude` / `update`; false after `init --no-hook`. */
+  hook: boolean;
   decisionsDir: string;
   observationsDir: string;
   modelDir: string;
@@ -127,6 +132,8 @@ export function loadConfig(root: string): Config {
     maxEvidencePerFact: Number(raw.max_evidence_per_fact ?? DEFAULT_LIMITS.max_evidence_per_fact),
     maxWhyHits: Number(raw.max_why_hits ?? DEFAULT_LIMITS.max_why_hits),
     onboardBatch: Number(raw.onboard_batch ?? DEFAULT_LIMITS.onboard_batch),
+    maxQuietLines: Number(raw.max_quiet_lines ?? DEFAULT_LIMITS.max_quiet_lines),
+    hook: raw.hook !== false,
     decisionsDir: decisionsDir(root),
     observationsDir: observationsDir(root),
     modelDir: modelDir(root),
@@ -172,10 +179,10 @@ export function migrate(root: string): string[] {
  * Write the config with the given tools, keeping other settings. Keys from the retired
  * LLM-backed version (`llm`) are dropped. Returns true if the file changed.
  */
-export function writeConfig(root: string, tools: Tool[]): boolean {
+export function writeConfig(root: string, tools: Tool[], extra: Record<string, unknown> = {}): boolean {
   const path = configPath(root);
   const { llm: _llm, ...raw } = readRaw(root);
-  const next = JSON.stringify({ ...DEFAULT_CONFIG, ...raw, version: DEFAULT_CONFIG.version, tools }, null, 2) + "\n";
+  const next = JSON.stringify({ ...DEFAULT_CONFIG, ...raw, ...extra, version: DEFAULT_CONFIG.version, tools }, null, 2) + "\n";
   if (existsSync(path) && readFileSync(path, "utf8") === next) return false;
   writeFileSync(path, next, "utf8");
   return true;

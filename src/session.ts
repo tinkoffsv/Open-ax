@@ -20,6 +20,8 @@ export interface MainOptions {
   cwd?: string;
   out?: (line: string) => void;
   err?: (line: string) => void;
+  /** Hook input for tests; the real CLI reads process.stdin. */
+  stdin?: string;
 }
 
 export interface Loaded {
@@ -129,11 +131,15 @@ export const OPTIONS = {
   elements: { type: "string", multiple: true },
   open: { type: "boolean" },
   progress: { type: "boolean" },
+  quiet: { type: "boolean" },
+  record: { type: "boolean" },
+  "no-hook": { type: "boolean" },
   // diagram
   level: { type: "string" },
   container: { type: "string" },
   format: { type: "string" },
   out: { type: "string" },
+  "write-readme": { type: "string" },
   // record / decisions
   inferred: { type: "boolean" },
   source: { type: "string" },

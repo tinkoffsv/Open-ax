@@ -20,7 +20,7 @@ import {
 } from "../memory/model.js";
 import { newQuestion, questionValue } from "../memory/questions.js";
 import { formatEntry, newScenario, parseEntry } from "../memory/scenarios.js";
-import { CLI } from "../packet.js";
+import { CLI, renderScenario, scenarioJson } from "../packet.js";
 import { EXIT_OK, evidencePath, idList, refreshProject, rel, required, type Flags, type Loaded, type Session } from "../session.js";
 
 export const MODEL_USAGE = `Usage:
@@ -36,7 +36,8 @@ Kinds: ${ELEMENT_KINDS.join(", ")}. Statuses: ${ELEMENT_STATUSES.join(", ")}.`;
 
 export const SCENARIO_USAGE = `Usage:
   ${CLI} scenario add --name <n> [--entry <route:/path | consumer:topic | cron:name | command:name>] [--description <d>]
-  ${CLI} scenario list [--json]`;
+  ${CLI} scenario list [--json]
+  ${CLI} scenario "<name|SCN-id>" [--json]     the packet for an on-demand sequence diagram`;
 
 export const QUESTION_USAGE = `Usage:
   ${CLI} question add --text "<question>" --elements <id,...> [--evidence <path>...]
@@ -378,7 +379,31 @@ export function cmdScenario(flags: Flags, positionals: string[], s: Session): nu
     }
     return EXIT_OK;
   }
-  throw new OpenAXError(`${sub ? `Unknown scenario subcommand \`${sub}\`.` : "scenario needs a subcommand."}\n\n${SCENARIO_USAGE}`);
+  if (!sub) throw new OpenAXError(`scenario needs a subcommand or a scenario name.\n\n${SCENARIO_USAGE}`);
+  const name = positionals.join(" ").trim();
+  const scenario = m.scenarios.find(name);
+  if (!scenario) {
+    const known = m.scenarios.all();
+    throw new OpenAXError(`Unknown scenario "${name}".${known.length ? ` Known: ${known.map((sc) => `${sc.id} ${sc.name}`).join(", ")}.` : " None registered yet."}\n\n${SCENARIO_USAGE}`);
+  }
+  const elements = m.model.all();
+  const tagged = elements.filter((e) => e.scenarios.includes(scenario.id));
+  const packet = {
+    id: scenario.id,
+    name: scenario.name,
+    description: scenario.description,
+    entry: formatEntry(scenario.entry),
+    path: rel(m.root, scenario.path),
+    elements: tagged.map((e) => ({
+      ...elementView(m.root, e),
+      parent_name: e.parent ? m.model.get(e.parent)?.name ?? e.parent : "",
+      scenario_names: e.scenarios.map((id) => m.scenarios.get(id)?.name ?? id),
+      incoming: m.model.incoming(e.id).map((r) => ({ from: `${r.from.id} ${r.from.name}`, kind: r.relation.kind, description: r.relation.description })),
+    })),
+  };
+  if (flags.json) s.json(scenarioJson(packet));
+  else s.out(renderScenario(packet));
+  return EXIT_OK;
 }
 
 // --- question ---------------------------------------------------------------------------------
