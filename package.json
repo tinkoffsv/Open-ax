@@ -1,0 +1,49 @@
+{
+  "name": "openax",
+  "version": "0.0.0",
+  "description": "Architectural memory for AI coding agents.",
+  "license": "MIT",
+  "author": "Sergei Drozdov (https://github.com/tinkoffsv)",
+  "type": "module",
+  "bin": {
+    "openax": "dist/cli.js"
+  },
+  "files": [
+    "dist",
+    "prompts"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tinkoffsv/Openax.git"
+  },
+  "keywords": [
+    "architecture",
+    "adr",
+    "decisions",
+    "claude-code",
+    "ai",
+    "coding-agent"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "demo": "npm run build && node examples/demo.mjs",
+    "prepublishOnly": "npm run build"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.2",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.1"
+  },
+  "homepage": "https://github.com/tinkoffsv/Openax#readme",
+  "bugs": {
+    "url": "https://github.com/tinkoffsv/Openax/issues"
+  }
+}
