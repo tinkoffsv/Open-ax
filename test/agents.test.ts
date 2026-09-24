@@ -44,7 +44,7 @@ it("replaces a stale section and keeps surrounding content", () => {
 it("installs sections and skills per tool", () => {
   const dir = tempDir();
   const results = Object.fromEntries(install(dir, ["claude", "codex", "agents"]));
-  const skills = ["openax-onboard", "openax-context", "openax-check", "openax-why"];
+  const skills = ["openax-onboard", "openax-context", "openax-check", "openax-why", "openax-model", "openax-lint"];
   expect(results).toEqual({
     "CLAUDE.md": "created",
     ...Object.fromEntries(skills.map((n) => [`.claude/skills/${n}/SKILL.md`, "created"])),

@@ -144,7 +144,7 @@ describe("openax onboard", () => {
     expect(mid).toContain("## Scenarios registered\n\n- SCN-0001: Buying a plan");
     expect(mid).toContain("## Open questions (ask at most 5 this session, highest value first)\n\n- Q-0001 (value 2, CNT-0003, CNT-0004): Why does the worker share the api image instead of its own? [docker-compose.yml]");
     expect(mid).toContain("## Inferred decisions (derived from history, not confirmed)\n\n### DEC-0001: Async SQLAlchemy sessions [inferred: derived from history, not confirmed by the developer]");
-    expect(mid).toContain("Source: docs/adr/0003-async-db.md:3");
+    expect(mid).toContain("Citation: docs/adr/0003-async-db.md:3");
 
     // The developer answers; the elements the question concerned are confirmed.
     run(repo, ["model", "set", "CNT-0003", "--purpose", "Serves the HTTP API."]);

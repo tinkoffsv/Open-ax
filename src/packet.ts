@@ -53,7 +53,7 @@ function renderDecisions(decisions: DecisionView[]): string {
       const out = [`### ${d.id}: ${d.title}${history}`];
       if (d.decision) out.push(`Decision: ${d.decision}`);
       if (d.why) out.push(`Why: ${d.why}`);
-      if (d.source) out.push(`Source: ${d.source}`);
+      if (d.source) out.push(`Citation: ${d.source}`);
       if (d.path) out.push(`Source: ${d.path}`);
       return out.join("\n");
     })

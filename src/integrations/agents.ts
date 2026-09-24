@@ -24,11 +24,11 @@ This project keeps its architectural memory with OpenAX in \`.openax/\`: the arc
 - Before architecturally significant work (new infrastructure, external integrations, persistence, caching, background jobs, auth, communication between components, or a second way of doing something the project already does), run \`${CLI} context "<task>"\` and follow its instructions.
 - Treat recorded decisions as the developer's intent. Do not silently override or work around one. If the task seems to require contradicting a decision, stop and ask the developer before proceeding.
 - After making such changes, run \`${CLI} check\` and follow its instructions: report potential conflicts to the developer, ask the developer *why* for new architectural changes, and record their answer verbatim with \`${CLI} record\`. Never invent the reason.
-- To explain why something exists in this project, run \`${CLI} why "<subject>"\`.
+- To explain why something exists in this project, run \`${CLI} why "<subject>"\`. To see how a business scenario runs, \`${CLI} scenario "<name>"\`; for diagrams, \`${CLI} diagram\`; for architectural smells, \`${CLI} lint\`.
 - Do not copy decisions or observations into this file; OpenAX is the source of architectural memory.
 ${END}`;
 
-export const SKILLS = ["openax-onboard", "openax-context", "openax-check", "openax-why"] as const;
+export const SKILLS = ["openax-onboard", "openax-context", "openax-check", "openax-why", "openax-model", "openax-lint"] as const;
 
 /** The Claude Code Stop hook: one quiet check per agent turn (not PostToolUse), silent on trivial diffs. */
 export const HOOK_COMMAND = `${CLI} hook stop`;
