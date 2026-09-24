@@ -12,7 +12,7 @@ import { parseValue, setFrontmatter, slugify as slug, splitFrontmatter } from ".
 export { setFrontmatter };
 
 /** Decision statuses: `inferred` = reconstructed from history with a citation, never confirmed by the human. */
-export const DECISION_STATUSES = ["inferred", "active", "superseded"] as const;
+export const DECISION_STATUSES = ["inferred", "active", "superseded", "rejected"] as const;
 
 const ID_RE = /DEC-(\d+)/;
 const LIST_KEYS = new Set(["files", "related", "supersedes", "resolves", "elements", "answers"]);

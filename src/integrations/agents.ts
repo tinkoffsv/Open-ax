@@ -17,9 +17,10 @@ export const END = "<!-- openax:end -->";
 export const SECTION = `${START}
 ## Architectural memory (OpenAX)
 
-This project keeps its architectural memory with OpenAX in \`.openax/\`: decisions (the *why* behind its structure, DECIDED by the developer) and observations (what was found in the code, OBSERVED). OpenAX does not call a model or need an API key: you do the reasoning, and the CLI supplies the data and records the result.
+This project keeps its architectural memory with OpenAX in \`.openax/\`: the architecture model (containers, components, their purposes and scenarios, OBSERVED from the code and described by the agent), decisions (the *why* behind its structure, DECIDED by the developer or inferred from history with a citation) and the question queue. OpenAX does not call a model or need an API key: you do the reasoning, and the CLI supplies the data and records the result.
 
-- If \`.openax/observations/\` is empty, the project has not been onboarded yet: when the developer asks, run \`${CLI} onboard\` and follow its instructions.
+- If \`.openax/model/\` is empty, the project has not been onboarded yet: when the developer asks, run \`${CLI} onboard\` and follow its instructions. Onboarding is resumable: run it again for the next batch.
+- Write to the model only through \`${CLI} model ...\`, \`${CLI} scenario ...\` and \`${CLI} question ...\`; never edit \`.openax/model/\` by hand.
 - Before architecturally significant work (new infrastructure, external integrations, persistence, caching, background jobs, auth, communication between components, or a second way of doing something the project already does), run \`${CLI} context "<task>"\` and follow its instructions.
 - Treat recorded decisions as the developer's intent. Do not silently override or work around one. If the task seems to require contradicting a decision, stop and ask the developer before proceeding.
 - After making such changes, run \`${CLI} check\` and follow its instructions: report potential conflicts to the developer, ask the developer *why* for new architectural changes, and record their answer verbatim with \`${CLI} record\`. Never invent the reason.

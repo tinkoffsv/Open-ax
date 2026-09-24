@@ -128,10 +128,13 @@ export const OPTIONS = {
   text: { type: "string" },
   elements: { type: "string", multiple: true },
   open: { type: "boolean" },
-  // record
+  progress: { type: "boolean" },
+  // record / decisions
   inferred: { type: "boolean" },
   source: { type: "string" },
   answers: { type: "string", multiple: true },
+  confirm: { type: "string", multiple: true },
+  reject: { type: "string", multiple: true },
 } as const;
 
 export type Flags = {

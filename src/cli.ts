@@ -6,7 +6,10 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { prefilter, truncate } from "./analysis/significance.js";
-import { cmdModel, cmdQuestion, cmdScenario, confirmElements, MODEL_USAGE, QUESTION_USAGE, SCENARIO_USAGE } from "./commands/model.js";
+import { cmdModel, cmdQuestion, cmdScenario, confirmElements, elementView, MODEL_USAGE, QUESTION_USAGE, SCENARIO_USAGE } from "./commands/model.js";
+import { cmdOnboard, questionView } from "./commands/onboard.js";
+import { isInferred } from "./memory/decisions.js";
+import { formatEntry } from "./memory/scenarios.js";
 import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
 import { OpenAXError } from "./errors.js";
 import { getDiff, grep, headCommit, isEmpty } from "./git.js";
@@ -46,7 +49,7 @@ Usage:
   openax init [--tools ${TOOLS.join(",")}]
   openax update
   openax scan [--json]
-  openax onboard [--json]
+  openax onboard [--progress] [--json]
   openax why "<subject>" [--json]
   openax check [--staged | --base <ref>] [--json]
   openax context "<task>" [--diff] [--json]
@@ -56,13 +59,14 @@ Usage:
   openax observe --kind <kind> --title <t> --statement <s> --evidence <path>... [--question <q>]
   openax record --title <t> --decision <d> --why <reason> [options]
   openax decisions [--observations] [--all] [-v]
+  openax decisions --inferred [--confirm <n|id>,...] [--reject <n|id>,...]
 
 Commands:
   init        create .openax/ and install agent instructions and skills
   update      refresh the installed agent instructions and skills
   scan        list components, data stores, integrations and possible ambiguities (no model)
-  onboard     print the onboarding packet: the agent verifies the scan and asks at most 5 questions
-  why         print decisions, observations and code mentions that explain a subject
+  onboard     seed the model from the scan, then print the next batch to describe and the open questions
+  why         print decisions, model elements, scenarios, questions and code mentions that explain a subject
   check       print the current git diff and recorded decisions for the agent to review
   context     print recorded decisions for the agent to apply to a task
   model       read and write the architecture model (.openax/model/): elements, purposes, relations
@@ -70,7 +74,7 @@ Commands:
   question    the question queue (.openax/questions/): what only the developer can answer
   observe     record something found in the repository (OBSERVED, with evidence)
   record      record a decision (the reason must be the developer's own words)
-  decisions   list recorded decisions
+  decisions   list recorded decisions; --inferred lists the reconstructed ones to confirm or reject
 
 Options for observe:
   --kind <kind>         ${KINDS.join(", ")}
@@ -178,34 +182,39 @@ function cmdScan(flags: Flags, s: Session): number {
 
 // --- onboard ----------------------------------------------------------------------------------
 
-function cmdOnboard(flags: Flags, s: Session): number {
-  const { root, store, observations } = s.load();
-  const scan = scanWithLimits(root);
-  const active = store.active();
-  const packet = {
-    scan,
-    decisions: active.slice(0, limits.maxCandidates).map((d) => view(root, d)),
-    totalDecisions: active.length,
-    observations: observations.all().map((o) => observationView(root, o)),
-  };
-  if (flags.json) s.json(onboardJson(packet));
-  else s.out(renderOnboard(packet));
-  return EXIT_OK;
-}
+// (see src/commands/onboard.ts)
 
 // --- why --------------------------------------------------------------------------------------
 
 function cmdWhy(flags: Flags, positionals: string[], s: Session): number {
   const subject = positionals.join(" ").trim();
   if (!subject) throw new OpenAXError('Provide a subject, e.g. `openax why redis` or `openax why "payment webhook"`.');
-  const { root, config, store, observations } = s.load();
+  const m = s.load();
+  const { root, config, store, observations, model, scenarios, questions } = m;
   const scan = scanWithLimits(root);
+  const elements = model.all();
+  const matched = elements.filter((e) => mentions(subject, [e.name, e.purpose, e.technology, e.notes, e.evidence.join(" "), e.entryPoints.join(" ")].join("\n")));
+  const matchedIds = new Set(matched.map((e) => e.id));
+  const allScenarios = scenarios.all();
   const packet = {
     subject,
     decisions: store
       .all()
-      .filter((d) => mentions(subject, [d.title, d.decision, d.why, d.files.join(" ")].join("\n")))
+      .filter((d) => d.status !== "rejected" && (mentions(subject, [d.title, d.decision, d.why, d.files.join(" ")].join("\n")) || d.elements.some((id) => matchedIds.has(id))))
       .map((d) => view(root, d)),
+    elements: matched.map((e) => ({
+      ...elementView(root, e),
+      parent_name: e.parent ? model.get(e.parent)?.name ?? e.parent : "",
+      scenario_names: e.scenarios.map((id) => allScenarios.find((sc) => sc.id === id)?.name ?? id),
+      incoming: model.incoming(e.id).map((r) => ({ from: `${r.from.id} ${r.from.name}`, kind: r.relation.kind, description: r.relation.description })),
+    })),
+    scenarios: allScenarios
+      .filter((sc) => mentions(subject, [sc.name, sc.description, formatEntry(sc.entry)].join("\n")) || elements.some((e) => matchedIds.has(e.id) && e.scenarios.includes(sc.id)))
+      .map((sc) => ({ id: sc.id, name: sc.name, description: sc.description, entry: formatEntry(sc.entry), elements: elements.filter((e) => e.scenarios.includes(sc.id)).map((e) => e.name) })),
+    questions: questions
+      .open()
+      .filter((q) => mentions(subject, q.text) || q.elements.some((id) => matchedIds.has(id)))
+      .map((q) => questionView(root, q)),
     observations: observations
       .all()
       .filter((o) => mentions(subject, [o.title, o.statement, o.question, o.evidence.join(" ")].join("\n")))
@@ -395,6 +404,7 @@ function cmdRecord(flags: Flags, s: Session): number {
 
 function cmdDecisions(flags: Flags, s: Session): number {
   if (flags.observations) return listObservations(flags, s);
+  if (flags.inferred || flags.confirm?.length || flags.reject?.length) return inferredDecisions(flags, s);
   const { root, store } = s.load();
   const decisions = flags.all ? store.all() : store.active();
   if (decisions.length === 0) {
@@ -411,6 +421,53 @@ function cmdDecisions(flags: Flags, s: Session): number {
       s.out(`          ${rel(root, d.path)}`);
     }
   }
+  return EXIT_OK;
+}
+
+/** Batch confirmation of inferred decisions: list them numbered, then `--confirm 1,3 --reject 2` (numbers or ids). */
+function inferredDecisions(flags: Flags, s: Session): number {
+  const m = s.load();
+  const { root, store } = m;
+  const inferred = store.all().filter(isInferred);
+  const pick = (raw: string): string => {
+    const byNumber = /^\d+$/.test(raw) ? inferred[Number(raw) - 1] : undefined;
+    const id = byNumber?.id ?? raw;
+    if (!inferred.some((d) => d.id === id)) throw new OpenAXError(`${raw} is not an inferred decision. Run \`${CLI} decisions --inferred\` to see the numbered list.`);
+    return id;
+  };
+  const confirm = idList(flags.confirm).map(pick);
+  const reject = idList(flags.reject).map(pick);
+  for (const id of confirm) if (reject.includes(id)) throw new OpenAXError(`${id} is both confirmed and rejected.`);
+  if (confirm.length || reject.length) {
+    for (const id of confirm) {
+      const d = store.setStatus(id, "active");
+      s.out(`${id} confirmed: ${d.title}`);
+    }
+    for (const id of reject) {
+      const d = store.setStatus(id, "rejected");
+      s.out(`${id} rejected: ${d.title}`);
+    }
+    refreshProject(m);
+    return EXIT_OK;
+  }
+  if (inferred.length === 0) {
+    if (flags.json) s.json({ inferred: [] });
+    else s.out("No inferred decisions. Decisions reconstructed from history are recorded with `record --inferred --source ...`.");
+    return EXIT_OK;
+  }
+  if (flags.json) {
+    s.json({ inferred: inferred.map((d, i) => ({ number: i + 1, ...view(root, d) })) });
+    return EXIT_OK;
+  }
+  s.out("INFERRED (derived from history, not confirmed by the developer)");
+  inferred.forEach((d, i) => {
+    s.out(`${String(i + 1).padStart(2)}. ${d.id} ${d.title}`);
+    if (d.decision) s.out(`    ${d.decision}`);
+    if (d.why) s.out(`    Why: ${d.why}`);
+    if (d.source) s.out(`    Source: ${d.source}`);
+    if (flags.verbose) s.out(`    ${rel(root, d.path)}`);
+  });
+  s.out(`\nAsk the developer which ones hold, then: ${CLI} decisions --confirm 1,3 --reject 2 (numbers or DEC ids).`);
   return EXIT_OK;
 }
 
@@ -463,8 +520,10 @@ export function main(argv: string[], opts: MainOptions = {}): number {
         return cmdUpdate(s);
       case "scan":
         return cmdScan(flags, s);
-      case "onboard":
-        return cmdOnboard(flags, s);
+      case "onboard": {
+        let cached: ScanResult | null = null;
+        return cmdOnboard(flags, s, () => (cached ??= scanWithLimits(s.root())));
+      }
       case "why":
         return cmdWhy(flags, rest, s);
       case "check":

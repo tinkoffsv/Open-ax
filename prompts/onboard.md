@@ -1,27 +1,21 @@
-Your job is to make this project's implicit architecture visible. What matters is not a description of the stack: it is **the things OpenAX cannot confidently explain**, turned into a few questions the owner finds worth answering.
+Your job is to turn this repository into an architecture model the owner would recognize: what each part is *for*, which business scenarios it serves, and *why* it is built this way. OpenAX has already written the deterministic skeleton (containers from compose, external systems, component candidates from the code layout). You fill in what only reading the code can tell, and you ask the owner only what the code cannot.
 
-1. **Verify the scan.** The facts and possible ambiguities below were found by reading files, without a model, and are unverified. Open the cited evidence files and check each one. Drop anything you cannot support with evidence.
-2. **Look for non-obvious ambiguities** beyond the scan's candidates, for example:
-   - two mechanisms for the same job (e.g. a queue and cron, webhooks and polling, two HTTP or LLM clients);
-   - an unclear source of truth for some state (the database vs a payment provider, a file on disk vs a table);
-   - one responsibility spread over several modules that look like duplicates;
-   - infrastructure that is configured but unused, or used but not declared;
-   - dev and production setups that diverge.
-
-   Prefer what the owner would not expect you to know. README-level facts are not ambiguities.
-3. **Record what you verified**, without duplicating anything already listed under OBSERVED or DECIDED below:
-   - key structure, only the few mechanisms that matter: `npx @openax/cli observe --kind component|datastore|integration|mechanism --title "..." --statement "It appears ..." --evidence <path> [--evidence <path>]`
-   - each verified ambiguity: `npx @openax/cli observe --kind ambiguity --title "..." --statement "I found ..." --question "..." --evidence <path> [--evidence <path>]`
-4. **Ask at most 5 questions** in this session, highest value first. Value means: would the answer change how future code should be written? Tie every question to specific evidence ("I found X in `a` and Y in `b`. Which one is authoritative?"). Do not ask generic questions such as "What is your product vision?", "Who are your customers?" or about goals or the team. Leave the remaining ambiguities recorded as open observations.
-5. **Record answers only in the developer's own words:**
+1. **The system's purpose comes first.** If the system has no purpose yet, ask the owner one question before anything else: what is this system for, in their words? Record it with `npx @openax/cli model set SYS-xxxx --purpose "<their words>"`. This question does not count against the budget below.
+2. **Describe the batch.** For every element listed under "This batch", open its evidence files and entry points, then write its purpose in one or two sentences: what functionality it delivers, not what technology it uses.
+   - `npx @openax/cli model set <id> --purpose "..."` (add `--technology "..."` when the skeleton got it wrong or left it empty)
+   - A candidate that is really part of another one: move it with `model set <id> --parent <container>` or, if it is a false candidate (a utility folder, a legal page), `model remove <id>`; then put its functionality where it belongs.
+   - Functionality the profiles missed: `model add --kind component --name "..." --parent <container> --purpose "..." --evidence <path>...`. Check "not covered" files and the uncovered modules listed with the candidates.
+   - How parts talk to each other, when you see it in the code: `model relate <from> <to> --kind calls|reads|writes|publishes|consumes|depends_on [--technology ...] [--description ...]`.
+3. **Name the scenarios.** The scenario candidates below are grouped entry points, not confirmed names. Propose names the owner would use for their business scenarios (checkout, publishing a site, onboarding a lead), merge and split the groups as the code suggests, and register each one: `npx @openax/cli scenario add --name "..." --entry "route:POST /v1/..." --description "..."`. Then tag the elements that implement it: `model set <id> --scenario <SCN-id>`. Ask the owner to confirm the names when you ask your questions; do not wait for confirmation to register them.
+4. **Reconstruct decisions only from text.** Search the documentation listed below (README, ARCHITECTURE, ADRs, archived notes), commit messages (`git log --grep`, `git log -S`) and code comments for the *reasons* behind what you see. A decision whose reason you found in a text may be recorded as inferred, with the citation verbatim:
 
    ```
-   npx @openax/cli record --title "<3-8 words>" --decision "<what the project does, one or two sentences>" --why "<the developer's answer, verbatim>" --resolves OBS-xxxx
+   npx @openax/cli record --title "..." --decision "<what the project does>" --why "<the reason as the text states it>" --inferred --source "<file:line or commit sha, with the quoted sentence>" [--elements <ids>]
    ```
 
-   Never invent, translate or embellish the reason. If the developer skips a question, record nothing and leave the observation open.
-6. **Finish with a short summary**: what you recorded (observation and decision IDs) and which questions remain open.
+   No textual source means no decision: never invent a reason, never infer one from the code alone. Put it in the queue instead: `npx @openax/cli question add --text "Why ...?" --elements <ids> --evidence <paths>`.
+5. **Ask at most 5 questions this session**, taken from the open questions below (they are ordered by value: how many elements the answer touches) plus any new ones you queued. Ask only about *why* and about ambiguity: two mechanisms for one job, an unclear source of truth, a boundary the code leaves open. Never ask the owner to confirm what you understood ("is this the auth component?") and never ask generic product questions. Tie every question to evidence: "I found X in `a` and Y in `b`; which is authoritative, and why?"
+6. **Record answers verbatim.** `npx @openax/cli question answer <Q-id> "<the owner's words>"`. When the answer is a reason for how the project is built, also record the decision: `npx @openax/cli record --title "..." --decision "..." --why "<the same words>" --answers <Q-id>`. The elements a question concerns become `confirmed` when the owner answers it; when the owner says "all correct" about the batch, run `npx @openax/cli model confirm --all`. Never confirm on your own judgement. If the owner skips a question, leave it open.
+7. **Stop when the batch is done**, then run `npx @openax/cli onboard` again: it prints the next batch. Finish each session with a short summary: elements described, scenarios registered, decisions recorded (ids), questions asked and answered, questions still open.
 
-Language: say "I found", "it appears", "this may indicate", "I cannot determine". Never present an observation as the intended architecture ("the correct architecture is ...", "this is a violation"): only a decision recorded by the developer says what is intended.
-
-On a re-run, observations with status `resolved` are answered. Do not ask about them again, and do not record duplicates of existing observations.
+Language: say "I found", "it appears", "this may indicate", "I cannot determine". Never present what you observed as the intended architecture: only a decision recorded from the owner's words says what is intended.

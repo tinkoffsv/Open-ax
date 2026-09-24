@@ -10,9 +10,11 @@ import type { Decision } from "./memory/decisions.js";
 import type { Observation } from "./memory/observations.js";
 import { loadPrompt } from "./prompts.js";
 import type { GrepResult } from "./git.js";
+import type { ElementView } from "./commands/model.js";
+import type { ContainerStatus, QuestionView, ScenarioCandidate } from "./commands/onboard.js";
 import type { Proposal } from "./scan/profiles/index.js";
 import type { Skeleton } from "./scan/skeleton.js";
-import { CATEGORIES, CATEGORY_LABELS, type Fact, type ScanResult } from "./scan/types.js";
+import { CATEGORIES, CATEGORY_LABELS, type Candidate, type Fact, type ScanResult } from "./scan/types.js";
 
 export const CLI = "npx @openax/cli";
 
@@ -23,6 +25,9 @@ export interface DecisionView {
   superseded_by: string;
   decision: string;
   why: string;
+  /** Citation of an inferred decision. */
+  source: string;
+  elements: string[];
   path: string;
 }
 
@@ -34,6 +39,8 @@ export function view(root: string, d: Decision): DecisionView {
     superseded_by: d.supersededBy,
     decision: d.decision,
     why: d.why,
+    source: d.source,
+    elements: d.elements,
     path: d.path ? relative(root, d.path) : "",
   };
 }
@@ -41,10 +48,11 @@ export function view(root: string, d: Decision): DecisionView {
 function renderDecisions(decisions: DecisionView[]): string {
   return decisions
     .map((d) => {
-      const history = d.status !== "active" ? ` [${d.status}${d.superseded_by ? ` by ${d.superseded_by}` : ""}: history]` : "";
+      const history = d.status === "inferred" ? " [inferred: derived from history, not confirmed by the developer]" : d.status !== "active" ? ` [${d.status}${d.superseded_by ? ` by ${d.superseded_by}` : ""}: history]` : "";
       const out = [`### ${d.id}: ${d.title}${history}`];
       if (d.decision) out.push(`Decision: ${d.decision}`);
       if (d.why) out.push(`Why: ${d.why}`);
+      if (d.source) out.push(`Source: ${d.source}`);
       if (d.path) out.push(`Source: ${d.path}`);
       return out.join("\n");
     })
@@ -321,44 +329,135 @@ export function scanJson(result: ScanResult): Record<string, unknown> {
 // --- onboard ----------------------------------------------------------------------------------
 
 export interface OnboardPacket {
-  scan: ScanResult;
+  root: string;
+  /** Lines printed when this run seeded the model from the scan. */
+  seeded: string[];
+  system: ElementView | null;
+  status: ContainerStatus[];
+  totalElements: number;
+  batch: ElementView[];
+  remaining: number;
+  batchSize: number;
+  scenarios: { id: string; name: string }[];
+  scenarioCandidates: ScenarioCandidate[];
+  questions: QuestionView[];
+  totalOpenQuestions: number;
   decisions: DecisionView[];
-  totalDecisions: number;
-  observations: ObservationView[];
+  inferred: DecisionView[];
+  ambiguities: { id: string; title: string; question: string; evidence: string[] }[];
+  docs: string[];
+  scanCandidates: Candidate[];
 }
 
 export function onboardInstructions(): string {
   return `## What to do\n\n${loadPrompt("onboard")}`;
 }
 
+function renderElement(e: ElementView, p: OnboardPacket): string {
+  const parent = e.parent ? p.status.find((c) => c.id === e.parent)?.name ?? (p.system?.id === e.parent ? p.system.name : e.parent) : "";
+  const head = `### ${e.id}: ${e.name} [${e.kind}${parent ? ` in ${parent}` : ""}${e.technology ? `, ${e.technology}` : ""}]`;
+  const lines = [head];
+  if (e.notes) lines.push(e.notes);
+  if (e.entry_points.length) lines.push(`Entry points: ${e.entry_points.join(", ")}`);
+  if (e.evidence.length) lines.push(`Evidence: ${e.evidence.join(", ")}`);
+  if (e.relations.length) lines.push(`Relations: ${e.relations.map((r) => `${r.kind} ${r.to}${r.description ? ` (${r.description})` : ""}`).join("; ")}`);
+  return lines.join("\n");
+}
+
+function renderStatus(p: OnboardPacket): string {
+  const lines = p.status.map((c) => {
+    const n = c.components;
+    const comps = n.observed + n.described + n.confirmed;
+    return `- ${c.id} ${c.name} [${c.kind}, ${c.status}]${comps ? `: ${comps} components (${n.observed} observed, ${n.described} described, ${n.confirmed} confirmed)` : ""}`;
+  });
+  return lines.join("\n");
+}
+
 export function renderOnboard(p: OnboardPacket): string {
-  return [
+  const parts = [
     "# OpenAX onboarding",
-    "OpenAX is this project's architectural memory. It does not call a model: you reconstruct the system from the evidence below, " +
-      "ask the developer a few questions, and record the results with the CLI.",
-    onboardInstructions(),
-    ...scanSections(p.scan),
-    decidedSection(p.decisions, p.totalDecisions),
-    observedSection(p.observations, p.observations.length),
-  ].join("\n\n");
+    "OpenAX is this project's architectural memory. It does not call a model: the skeleton below was derived from the repository; you read the code, " +
+      "describe what each part is for, name the scenarios, and ask the developer only what the code cannot answer.",
+  ];
+  if (p.seeded.length) parts.push(p.seeded.join("\n"));
+  parts.push(onboardInstructions());
+
+  if (!p.system) parts.push("## System\n\nNo model yet: the scan found nothing to build a skeleton from. Add the system with `model add --kind system --name ...`.");
+  else if (!p.system.purpose) parts.push(`## System: ${p.system.name} (${p.system.id})\n\n**Purpose not recorded.** Ask the developer what this system is for, then \`${CLI} model set ${p.system.id} --purpose "<their words>"\`.`);
+  else parts.push(`## System: ${p.system.name} (${p.system.id})\n\n${p.system.purpose}`);
+
+  if (p.status.length) parts.push(`## Model status (${p.totalElements} elements)\n\n${renderStatus(p)}`);
+
+  if (p.batch.length) {
+    const head = `## This batch (${p.batch.length} of ${p.remaining} elements still to describe)`;
+    parts.push(`${head}\n\n${p.batch.map((e) => renderElement(e, p)).join("\n\n")}`);
+    if (p.remaining > p.batch.length) parts.push(`${p.remaining - p.batch.length} more after this batch: run \`${CLI} onboard\` again when these are described.`);
+  } else if (p.system) {
+    parts.push("## This batch\n\nEvery element is described. Remaining work: scenarios, questions and confirmation by the developer.");
+  }
+
+  if (p.scenarioCandidates.length) {
+    const lines = p.scenarioCandidates.map((c) => `- **${c.name}** — ${c.entries} entry point${c.entries === 1 ? "" : "s"} in ${c.components.join(", ")} (e.g. ${c.examples.join(", ")})`);
+    parts.push(`## Scenario candidates (grouped entry points, not names yet)\n\n${lines.join("\n")}`);
+  }
+  if (p.scenarios.length) parts.push(`## Scenarios registered\n\n${p.scenarios.map((s) => `- ${s.id}: ${s.name}`).join("\n")}`);
+
+  if (p.questions.length || p.ambiguities.length) {
+    const lines = [
+      ...p.questions.map((q) => `- ${q.id} (value ${q.value}, ${q.elements.join(", ")}): ${q.text}${q.evidence.length ? ` [${q.evidence.join(", ")}]` : ""}`),
+      ...p.ambiguities.map((o) => `- ${o.id}: ${o.question || o.title}${o.evidence.length ? ` [${o.evidence.join(", ")}]` : ""}`),
+    ];
+    const more = p.totalOpenQuestions > p.questions.length ? `\n\n${p.totalOpenQuestions - p.questions.length} more open questions: \`${CLI} question list --open\`.` : "";
+    parts.push(`## Open questions (ask at most 5 this session, highest value first)\n\n${lines.join("\n")}${more}`);
+  } else {
+    parts.push("## Open questions\n\nNone queued. Queue what the code cannot answer with `question add`.");
+  }
+
+  parts.push(decidedSection(p.decisions, p.decisions.length));
+  if (p.inferred.length) parts.push(`## Inferred decisions (derived from history, not confirmed)\n\n${renderDecisions(p.inferred)}\n\nAsk the developer to confirm them: \`${CLI} decisions --inferred\`.`);
+
+  if (p.docs.length) parts.push(`## Documentation to search for reasons (citations for inferred decisions)\n\n${p.docs.map((d) => `- ${d}`).join("\n")}`);
+  if (p.scanCandidates.length) parts.push(`## Possible ambiguities from the file scan (unverified)\n\n${p.scanCandidates.map((c) => `- ${c.description} (${c.evidence.join(", ")})`).join("\n")}`);
+  return parts.join("\n\n");
 }
 
 export function onboardJson(p: OnboardPacket): Record<string, unknown> {
   return {
     status: "review",
     instructions: onboardInstructions(),
-    scan: scanJson(p.scan),
+    seeded: p.seeded,
+    system: p.system,
+    model_status: p.status,
+    total_elements: p.totalElements,
+    batch: p.batch,
+    remaining: p.remaining,
+    batch_size: p.batchSize,
+    scenarios: p.scenarios,
+    scenario_candidates: p.scenarioCandidates,
+    questions: p.questions,
+    total_open_questions: p.totalOpenQuestions,
     decisions: p.decisions,
-    total_decisions: p.totalDecisions,
-    observations: p.observations,
+    inferred: p.inferred,
+    ambiguities: p.ambiguities,
+    docs: p.docs,
+    scan_candidates: p.scanCandidates,
   };
 }
 
 // --- why --------------------------------------------------------------------------------------
 
+export interface WhyElement extends ElementView {
+  parent_name: string;
+  scenario_names: string[];
+  incoming: { from: string; kind: string; description: string }[];
+}
+
 export interface WhyPacket {
   subject: string;
   decisions: DecisionView[];
+  elements: WhyElement[];
+  scenarios: { id: string; name: string; description: string; entry: string; elements: string[] }[];
+  questions: QuestionView[];
   observations: ObservationView[];
   facts: Fact[];
   mentions: GrepResult;
@@ -377,19 +476,38 @@ function renderMentions(m: GrepResult): string {
 }
 
 export function isEmptyWhy(p: WhyPacket): boolean {
-  return p.decisions.length + p.observations.length + p.facts.length + p.mentions.hits.length === 0;
+  return p.decisions.length + p.elements.length + p.scenarios.length + p.questions.length + p.observations.length + p.facts.length + p.mentions.hits.length === 0;
+}
+
+function renderWhyElements(elements: WhyElement[]): string {
+  return elements
+    .map((e) => {
+      const out = [`### ${e.id}: ${e.name} [${e.kind}${e.parent_name ? ` in ${e.parent_name}` : ""}, ${e.status}]`];
+      if (e.technology) out.push(`Technology: ${e.technology}`);
+      out.push(`Purpose: ${e.purpose || "(not described yet)"}`);
+      if (e.scenario_names.length) out.push(`Scenarios: ${e.scenario_names.join(", ")}`);
+      for (const r of e.relations) out.push(`-> ${r.kind} ${r.to}${r.technology ? ` [${r.technology}]` : ""}${r.description ? `: ${r.description}` : ""}`);
+      for (const r of e.incoming) out.push(`<- ${r.kind} from ${r.from}${r.description ? `: ${r.description}` : ""}`);
+      if (e.evidence.length) out.push(`Evidence: ${e.evidence.join(", ")}`);
+      out.push(`Source: ${e.path}`);
+      return out.join("\n");
+    })
+    .join("\n\n");
 }
 
 export function renderWhy(p: WhyPacket): string {
   const parts = [`# OpenAX why: ${p.subject}`, whyInstructions()];
   if (isEmptyWhy(p)) {
-    parts.push(`## Evidence\n\nNothing found for "${p.subject}": no decision, observation, scan fact or mention in the repository.`);
+    parts.push(`## Evidence\n\nNothing found for "${p.subject}": no decision, model element, scenario, question, observation, scan fact or mention in the repository.`);
     return parts.join("\n\n");
   }
-  parts.push(
-    p.decisions.length ? `## ${DECIDED}\n\n${renderDecisions(p.decisions)}` : `## ${DECIDED}\n\nNo recorded decision mentions "${p.subject}".`,
-    p.observations.length ? `## ${OBSERVED}\n\n${renderObservations(p.observations)}` : `## ${OBSERVED}\n\nNone mention "${p.subject}".`,
-  );
+  parts.push(p.decisions.length ? `## ${DECIDED}\n\n${renderDecisions(p.decisions)}` : `## ${DECIDED}\n\nNo recorded decision mentions "${p.subject}".`);
+  if (p.elements.length) parts.push(`## Model elements (OBSERVED; purposes written by the agent, confirmed ones seen by the developer)\n\n${renderWhyElements(p.elements)}`);
+  if (p.scenarios.length) {
+    parts.push(`## Scenarios\n\n${p.scenarios.map((sc) => `- ${sc.id}: ${sc.name}${sc.description ? ` — ${sc.description}` : ""}${sc.entry ? ` (${sc.entry})` : ""}${sc.elements.length ? `; implemented by ${sc.elements.join(", ")}` : ""}`).join("\n")}`);
+  }
+  if (p.questions.length) parts.push(`## Open questions about it (nobody has answered these yet)\n\n${p.questions.map((q) => `- ${q.id}: ${q.text}`).join("\n")}`);
+  parts.push(p.observations.length ? `## ${OBSERVED}\n\n${renderObservations(p.observations)}` : `## ${OBSERVED}\n\nNone mention "${p.subject}".`);
   if (p.facts.length) {
     parts.push(`## Scan facts (OBSERVED, unverified)\n\n${p.facts.map((f) => `- [${f.category}] ${f.name}${f.detail ? ` — ${f.detail}` : ""} (${f.evidence.join(", ")})`).join("\n")}`);
   }
@@ -403,6 +521,9 @@ export function whyJson(p: WhyPacket): Record<string, unknown> {
     instructions: whyInstructions(),
     subject: p.subject,
     decisions: p.decisions,
+    elements: p.elements,
+    scenarios: p.scenarios,
+    questions: p.questions,
     observations: p.observations,
     facts: p.facts,
     mentions: p.mentions.hits,

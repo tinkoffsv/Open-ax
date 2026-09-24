@@ -28,9 +28,9 @@ describe("why instructions", () => {
       "Answer concisely",
       "Keep what was DECIDED",
       "apart from what was OBSERVED",
-      "Cite decision and observation IDs and file paths. Read the cited files",
+      "Cite decision, element, scenario and observation IDs and file paths. Read the cited files",
       '"I cannot determine why … exists; no recorded decision explains it."',
-      "Never present an observation or a code mention as the intended architecture.",
+      "Never present an observation, a model element or a code mention as the intended architecture.",
     ]) {
       expect(text, rule).toContain(rule);
     }
@@ -62,7 +62,7 @@ describe("openax why", () => {
 
   it("says nothing was found", () => {
     const r = run(project(), ["why", "kubernetes"]);
-    expect(r.out).toContain('Nothing found for "kubernetes": no decision, observation, scan fact or mention in the repository.');
+    expect(r.out).toContain('Nothing found for "kubernetes": no decision, model element, scenario, question, observation, scan fact or mention in the repository.');
     expect(JSON.parse(run(project(), ["why", "kubernetes", "--json"]).out).status).toBe("empty");
   });
 

@@ -37,6 +37,8 @@ export const DEFAULT_LIMITS = {
   max_scan_facts: 60,
   max_evidence_per_fact: 5,
   max_why_hits: 40,
+  // Elements `onboard` hands the agent per run.
+  onboard_batch: 12,
 };
 
 export interface Config {
@@ -48,6 +50,7 @@ export interface Config {
   maxScanFacts: number;
   maxEvidencePerFact: number;
   maxWhyHits: number;
+  onboardBatch: number;
   decisionsDir: string;
   observationsDir: string;
   modelDir: string;
@@ -123,6 +126,7 @@ export function loadConfig(root: string): Config {
     maxScanFacts: Number(raw.max_scan_facts ?? DEFAULT_LIMITS.max_scan_facts),
     maxEvidencePerFact: Number(raw.max_evidence_per_fact ?? DEFAULT_LIMITS.max_evidence_per_fact),
     maxWhyHits: Number(raw.max_why_hits ?? DEFAULT_LIMITS.max_why_hits),
+    onboardBatch: Number(raw.onboard_batch ?? DEFAULT_LIMITS.onboard_batch),
     decisionsDir: decisionsDir(root),
     observationsDir: observationsDir(root),
     modelDir: modelDir(root),
