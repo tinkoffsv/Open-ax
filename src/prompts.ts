@@ -7,7 +7,7 @@ const cache = new Map<string, string>();
 export function loadPrompt(name: string): string {
   let text = cache.get(name);
   if (text === undefined) {
-    text = readFileSync(new URL(`../prompts/${name}.md`, import.meta.url), "utf8");
+    text = readFileSync(new URL(`../prompts/${name}.md`, import.meta.url), "utf8").trimEnd();
     cache.set(name, text);
   }
   return text;

@@ -1,8 +1,9 @@
 ---
 id: DEC-0002
 created: 2026-09-24
-status: active
+status: superseded
 files: [src/llm/base.ts, src/memory/retrieval.ts]
+superseded_by: DEC-0004
 ---
 
 # LLM analysis behind a provider-neutral interface
