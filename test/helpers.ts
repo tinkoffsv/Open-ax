@@ -61,14 +61,17 @@ export function write(repo: string, name: string, content: string): void {
 export async function run(
   repo: string,
   argv: string[],
-  opts: { llm?: LLMClient; answers?: string[]; llmFactory?: MainOptions["llmFactory"] } = {},
+  opts: { llm?: LLMClient; answers?: string[]; llmFactory?: MainOptions["llmFactory"]; provider?: string } = {},
 ) {
   const out: string[] = [];
   const err: string[] = [];
   const replies = opts.answers ? [...opts.answers] : undefined;
   const asked: string[] = [];
+  // Scripted-LLM tests exercise the anthropic provider; everything else runs in the default agent mode.
+  const provider = opts.provider ?? (opts.llm || opts.llmFactory ? "anthropic" : undefined);
   const code = await main(argv, {
     cwd: repo,
+    env: provider ? { ...process.env, OPENAX_PROVIDER: provider } : { ...process.env, OPENAX_PROVIDER: undefined },
     llmFactory: opts.llmFactory ?? (() => opts.llm ?? new FakeLLM()),
     prompt: replies
       ? async (q) => {

@@ -7,6 +7,8 @@ It doesn't necessarily know *why* you built it that way.
 
 OpenAX captures important technical decisions while you build, recalls them when relevant, and warns when future AI-generated changes may contradict them.
 
+It needs no API key: the coding agent you already use (Claude Code, Cursor, Codex, ...) does the thinking, and OpenAX keeps the memory.
+
 > **Status: experimental / early-stage.** This is a first MVP to test one hypothesis. Expect rough edges and breaking changes.
 
 ---
@@ -23,44 +25,32 @@ The agent sees *what* the code does. It can't see *why*. So it makes changes tha
 
 ## Before / after
 
-Three months ago you added Stripe webhooks, and OpenAX asked you why:
+Three months ago Claude Code added Stripe webhooks to your project. It ran `openax check`, saw a new architectural mechanism, and asked you why:
 
 ```
-$ openax check
-OpenAX detected an architectural change:
-  Adds a Stripe webhook endpoint that updates payment state
-
-Why was this introduced? (Enter to skip)
-> Stripe is authoritative for payment state.
-Remember this decision? [Y/n] y
-
-Remembered DEC-0002: Payment state via Stripe webhooks
+Claude: I added a Stripe webhook endpoint that updates payment state. That's a new
+        mechanism, so OpenAX wants the reason behind it. Why webhooks?
+You:    Stripe is authoritative for payment state.
+Claude: $ npx @openax/cli record --title "Payment state via Stripe webhooks" \
+            --decision "Payment state is updated through Stripe webhooks." \
+            --why "Stripe is authoritative for payment state."
+        Remembered DEC-0002: Payment state via Stripe webhooks
 ```
 
-Today, an agent session "fixes" a delayed payment by adding a polling job.
+Today, another agent session "fixes" a delayed payment by adding a polling job.
 
 **Without OpenAX**, the job ships. You now have two mechanisms writing payment state, and nobody remembers which one is authoritative.
 
-**With OpenAX**:
+**With OpenAX**, the agent runs `openax check`, which puts DEC-0002 in front of it, and it stops to ask:
 
 ```
-$ openax check
-OpenAX detected an architectural change:
-  Adds PaymentPollingJob, a scheduled job that polls Stripe and updates payment status
-  - new mechanism for updating payment state: periodic polling of Stripe
-
-Potential architectural conflict
-  This change introduces a second mechanism for updating payment state.
-
-  Relevant previous decision: DEC-0002 — Payment state via Stripe webhooks
-    Payment state is updated through Stripe webhooks.
-  Reason:
-    Stripe is authoritative for payment state.
-
-Is adding polling alongside webhooks intentional?
+Claude: This change adds PaymentPollingJob, a second mechanism for updating payment
+        state. DEC-0002 says payment state is updated through Stripe webhooks,
+        because "Stripe is authoritative for payment state."
+        Is adding polling alongside webhooks intentional?
 ```
 
-OpenAX doesn't claim the change is wrong. It shows you the decision and asks. If the change is intentional, you say why, and the new decision is recorded (optionally superseding the old one).
+The agent doesn't claim the change is wrong. It shows you the decision and asks. If the change is intentional, you say why, and the new decision is recorded (optionally superseding the old one).
 
 ## How it works
 
@@ -75,29 +65,32 @@ There are four pieces:
 
 | | |
 |---|---|
-| **Observe** | `openax check` sends the current git diff to an LLM classifier and asks whether it is architecturally significant: a new database, queue, cache, external integration, auth mechanism, runtime component, or a second way of doing something. Renames, UI, tests and small fixes are ignored. Diffs that touch only docs, styles, assets or tests never reach the LLM. |
-| **Remember** | When a change is significant, OpenAX asks you *why* and writes a short Markdown decision to `.openax/decisions/`. Your reason is stored verbatim. The model only drafts the title and the "what" from the observed diff. |
-| **Recall** | `openax context "<task>"` returns the decisions relevant to a task, formatted for pasting into (or being read by) a coding agent. |
-| **Challenge** | Significant changes are compared against relevant decisions. The result is `no relevant decision`, `consistent`, or `potential conflict`. |
+| **Observe** | `openax check` looks at the current git diff. Diffs that touch only docs, styles, assets or tests are dismissed right away. For everything else it hands the coding agent the changed files and clear criteria for what counts as architectural: a new database, queue, cache, external integration, auth mechanism, runtime component, or a second way of doing something. |
+| **Challenge** | The same output lists the recorded decisions, and the agent compares the change with them: no relevant decision, consistent, or potential conflict. A conflict is raised as a question for you, never as a verdict. |
+| **Remember** | For a new decision, the agent asks you *why* and saves it with `openax record`: a short Markdown file in `.openax/decisions/`. Your reason is stored verbatim. |
+| **Recall** | `openax context "<task>"` gives the agent the recorded decisions before it starts a task, so it can follow the ones that apply. |
+
+The CLI itself is deterministic: it reads git, stores files and prints instructions, and never calls a model. You can also let OpenAX call the Anthropic API itself instead (see [Configuration](#configuration)). That's useful in git hooks or CI, where no agent is present.
 
 Principles:
 
 - **Zero architecture homework.** You don't write diagrams, YAML models or ADR hierarchies. You answer a question now and then.
 - **Ask rarely.** OpenAX says nothing about normal changes.
 - **The AI is not the authority.** OpenAX reports what it *observes*. Intent comes only from you.
-- **Local-first.** Decisions are plain files in your repo, versioned with your code. There is no server, no account and no telemetry.
+- **Local-first.** Decisions are plain files in your repo, versioned with your code. There is no server, no account, no API key and no telemetry.
 - **Hands off your code.** OpenAX never modifies application source code and never commits.
 
 ## Installation
 
-Requirements: Node.js 22+, git, and an Anthropic API key.
+Requirements: Node.js 22+ and git. No API key.
 
 No installation is needed. Run it with `npx`:
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
 npx @openax/cli init
 ```
+
+Then work with your coding agent as usual: the `CLAUDE.md` section that `init` adds tells it when to run OpenAX.
 
 Or install it globally, or as a dev dependency of your project:
 
@@ -135,37 +128,39 @@ openax check --staged     # only staged changes
 openax check --base main  # everything since a ref, e.g. after committing
 ```
 
-- Insignificant change: prints `No architecturally significant changes detected.`
-- Significant change: prints a summary of the architectural impact, the relevant decisions and any potential conflict, then asks why and offers to remember the decision.
+- Trivial change (docs, styles, assets, tests only): prints `No architecturally significant changes detected.`
+- Anything else: prints a review for the coding agent. It contains the changed files, the command to see the diff, the criteria for architectural significance, the recorded decisions, how to handle a potential conflict, and the exact `openax record` command to use once the developer has given a reason.
 
-Non-interactive options, for agents and scripts:
+### `openax record`
 
 ```bash
-openax check --no-input                           # report only, never prompt
-openax check --why "Stripe is authoritative..."   # record this reason without prompting
-openax check --why "..." --supersede              # ...and supersede the conflicting decision(s)
+openax record \
+  --title "Asynchronous email delivery" \
+  --decision "Email delivery uses Celery workers backed by Redis." \
+  --why "Sending email synchronously made registration too slow." \
+  [--related DEC-0001] [--supersedes DEC-0002] [--staged | --base <ref>]
 ```
 
-Exit codes: `0` ok, `1` an unresolved potential conflict, `2` an error.
-
-When you run `check` again on a change that is already recorded, OpenAX recognizes it and doesn't ask a second time.
+Writes the next `DEC-XXXX` file. `--why` is required and must be the developer's own words. The changed files and the current commit are added as provenance. `--supersedes` marks older decisions as superseded. `--related` and `--supersedes` can be repeated or take comma-separated IDs.
 
 ### `openax context "<task>"`
 
 ```bash
 $ openax context "Add invoice email delivery"
-# Relevant architectural decisions (OpenAX)
+# Architectural decisions (OpenAX)
 
-These were recorded by the developer. Respect them; if the task requires deviating from one, ask the developer before proceeding.
+Task: Add invoice email delivery
 
-## DEC-0001: Asynchronous email delivery
+These decisions were recorded by the developer. They state the intent behind the project's structure.
+...
+
+### DEC-0001: Asynchronous email delivery
 Decision: Email delivery uses Celery workers backed by Redis.
 Why: Sending email synchronously made registration too slow.
-Relevance: Invoice emails should go through the same Celery-based delivery path.
-Source: .openax/decisions/DEC-0001-async-email.md
+File: .openax/decisions/DEC-0001-async-email.md
 ```
 
-Add `--diff` to use the current git diff as (part of) the query.
+The agent picks the decisions that apply to its task. With many decisions, OpenAX shows the 40 that share the most keywords with the task. Add `--diff` to use the current git diff as (part of) the query.
 
 ### `openax decisions`
 
@@ -195,11 +190,7 @@ Email delivery uses Celery workers backed by Redis.
 Sending email synchronously made registration too slow.
 
 ## Evidence
-Observed change: Introduces Redis and Celery for asynchronous email delivery
-- new infrastructure dependency: Redis
-- new background processing mechanism: Celery
-
-Recorded by `openax check` on 2026-09-24 from uncommitted changes on top of commit abc123.
+Recorded with `openax record` on 2026-09-24 from uncommitted changes on top of commit abc123.
 ```
 
 These are ordinary Markdown files. Edit them, write new ones by hand, or delete them. Parsing is lenient: a file with only a `# Title` and `## Decision` / `## Why` sections works too. `status: superseded` removes a decision from recall. `commit` is the commit that the observed change was on top of.
@@ -208,11 +199,12 @@ These are ordinary Markdown files. Edit them, write new ones by hand, or delete 
 
 `openax init` adds this section to `CLAUDE.md` (between `<!-- openax:start -->` and `<!-- openax:end -->`; re-running `init` refreshes it):
 
-- Before architecturally significant work, run `openax context "<task>"` and follow the decisions it returns.
+- Before architecturally significant work, run `openax context "<task>"` and follow the decisions that apply.
 - Don't silently override a recorded decision. Ask the developer first.
-- After significant changes, run `openax check --no-input`. Report conflicts to the developer. Ask the developer for the *why* and record it with `openax check --why "..."`. Never invent the reason.
+- After such changes, run `openax check` and follow its instructions: report conflicts to the developer, and ask for the *why* behind new decisions.
+- Record a decision only with the developer's own words, via `openax record`. Never invent the reason.
 
-Decisions are never copied into `CLAUDE.md`. OpenAX remains the source of architectural memory. The core has no dependency on Claude Code, so any agent that can run a shell command can use the same commands.
+Decisions are never copied into `CLAUDE.md`. OpenAX remains the source of architectural memory. The core has no dependency on Claude Code: any agent that can run a shell command can use the same commands. For other agents, copy the section into their instruction file, e.g. `AGENTS.md` or `.cursorrules`.
 
 ## Configuration
 
@@ -221,38 +213,44 @@ Decisions are never copied into `CLAUDE.md`. OpenAX remains the source of archit
 ```json
 {
   "version": 1,
-  "llm": { "provider": "anthropic", "model": "claude-opus-5", "effort": "medium" },
+  "llm": { "provider": "agent", "model": "claude-opus-5", "effort": "medium" },
   "max_diff_chars": 60000
 }
 ```
 
-Environment overrides: `OPENAX_PROVIDER`, `OPENAX_MODEL`, `OPENAX_EFFORT`. Credentials come from the environment (`ANTHROPIC_API_KEY`) and are never stored. Diffs longer than `max_diff_chars` are truncated before analysis, with a warning.
+`provider` picks who does the reasoning:
 
-Every LLM call goes through a single `LLMClient.completeJson(system, user, schema)` interface (`src/llm/`). Adding a provider means implementing one method. The prompts live as Markdown files in `prompts/` so you can iterate on them independently.
+- **`agent`** (default): the coding agent that runs OpenAX. No API key, and no code is sent anywhere by OpenAX.
+- **`anthropic`**: OpenAX calls the Anthropic API itself, using `ANTHROPIC_API_KEY` from the environment (never stored). `check` then classifies the diff, compares it with decisions and asks for the reason interactively; `--no-input`, `--why "..."` and `--why "..." --supersede` make it scriptable. Exit codes: `0` ok, `1` an unresolved potential conflict, `2` an error. `model`, `effort` and `max_diff_chars` apply only to this provider.
+
+Environment overrides: `OPENAX_PROVIDER`, `OPENAX_MODEL`, `OPENAX_EFFORT`.
+
+In `anthropic` mode every model call goes through a single `LLMClient.completeJson(system, user, schema)` interface (`src/llm/`), so adding a provider means implementing one method. All prompts, including the agent-mode instructions, live as Markdown files in `prompts/`.
 
 ## Try the demo
 
 ```bash
 npm run demo               # scripted stand-in model, no API key needed
-npm run demo -- --live     # real model
+npm run demo -- --live     # real Anthropic API for the model steps
 ```
 
-The demo creates a throwaway repository and walks through init → silent change → Redis/Celery decision → Stripe webhook decision → `context` → conflicting polling job.
+The demo creates a throwaway repository and walks through init → silent change → Redis/Celery decision → Stripe webhook decision → `context` → conflicting polling job, using the `anthropic` provider. The last step shows what the default agent mode prints instead.
 
 ## Project layout
 
 ```
 src/
-  cli.ts                     commands: init, check, context, decisions
+  cli.ts                     commands: init, check, context, record, decisions
+  agent.ts                   agent mode: instructions for the coding agent
   git.ts                     reads diffs via the git CLI (read-only)
-  llm/                       LLMClient interface + Anthropic provider
+  llm/                       LLMClient interface + Anthropic provider (optional)
   analysis/significance.ts   OBSERVE
   analysis/conflict.ts       CHALLENGE
   memory/decisions.ts        REMEMBER: Markdown decision store
   memory/remember.ts         drafting a decision from change + WHY
   memory/retrieval.ts        RECALL: lexical pre-filter + LLM relevance
   integrations/claude.ts     CLAUDE.md managed section
-prompts/                     prompt templates (Markdown)
+prompts/                     agent instructions and model prompts (Markdown)
 test/                        vitest suites (LLM calls are scripted)
 ```
 

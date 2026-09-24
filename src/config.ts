@@ -11,13 +11,17 @@ export const CONFIG_FILE = "config.json";
 export const DEFAULT_CONFIG = {
   version: 1,
   llm: {
-    provider: "anthropic",
+    // "agent": no API key; the coding agent running OpenAX does the reasoning.
+    // "anthropic": OpenAX calls the Anthropic API itself (needs ANTHROPIC_API_KEY).
+    provider: "agent",
     model: "claude-opus-5",
     effort: "medium",
   },
   // Diffs larger than this are truncated before being sent to the LLM (with a warning).
   max_diff_chars: 60000,
 };
+
+export const AGENT_PROVIDER = "agent";
 
 export interface Config {
   root: string;

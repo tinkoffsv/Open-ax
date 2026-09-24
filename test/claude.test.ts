@@ -12,7 +12,8 @@ it("creates CLAUDE.md", () => {
   const text = read(dir);
   expect(text).toContain(START);
   expect(text).toContain("npx @openax/cli context");
-  expect(text).toContain("npx @openax/cli check --no-input");
+  expect(text).toContain("npx @openax/cli check");
+  expect(text).toContain("npx @openax/cli record");
 });
 
 it("appends to an existing file and is idempotent", () => {

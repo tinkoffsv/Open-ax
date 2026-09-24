@@ -10,5 +10,5 @@ export async function createClient(config: Config): Promise<LLMClient> {
     const { AnthropicClient } = await import("./anthropic.js");
     return new AnthropicClient(config.model, config.effort);
   }
-  throw new LLMError(`Unknown LLM provider \`${config.provider}\`. Supported: anthropic.`);
+  throw new LLMError(`Unknown LLM provider \`${config.provider}\`. Supported: agent, anthropic.`);
 }

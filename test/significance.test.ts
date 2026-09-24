@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { classify, globToRegExp, isTrivialPath, prefilter, truncate } from "../src/analysis/significance.js";
 import { FakeLLM } from "./helpers.js";
 
-const diff = (text: string, files: string[]) => ({ text, files, base: null });
+const diff = (text: string, files: string[]) => ({ text, files, untracked: [], base: null });
 
 describe("prefilter", () => {
   it("recognizes trivial paths", () => {

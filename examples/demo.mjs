@@ -1,8 +1,10 @@
 /**
  * Walk through the OpenAX loop on a throwaway git repository.
  *
- *   npm run demo                 # scripted stand-in model, no API key needed
- *   npm run demo -- --live       # real model (needs ANTHROPIC_API_KEY)
+ *   npm run demo                 # steps 1-7: anthropic provider with a scripted stand-in model
+ *   npm run demo -- --live       # steps 1-7 against the real Anthropic API (needs ANTHROPIC_API_KEY)
+ *
+ * Step 8 shows the default agent mode, which needs no model at all.
  *
  * The scripted model only exists so the flow can be shown without credentials;
  * it pattern-matches the demo diffs and is not a classifier.
@@ -77,7 +79,7 @@ const file = (name, content) => writeFileSync(join(repo, name), content);
 const commit = (msg) => (sh("git", "add", "-A"), sh("git", "commit", "-q", "-m", msg));
 const step = (title) => console.log(`\n\x1b[1m=== ${title} ===\x1b[0m`);
 
-async function openax(argv, replies) {
+async function openax(argv, replies, provider = "anthropic") {
   console.log(`$ openax ${argv.map((a) => (/\s/.test(a) ? JSON.stringify(a) : a)).join(" ")}`);
   const queue = replies ? [...replies] : null;
   const prompt = queue
@@ -87,7 +89,8 @@ async function openax(argv, replies) {
         return answer;
       }
     : undefined;
-  console.log(`[exit ${await main(argv, { cwd: repo, llmFactory, prompt })}]`);
+  const env = { ...process.env, OPENAX_PROVIDER: provider };
+  console.log(`[exit ${await main(argv, { cwd: repo, llmFactory, prompt, env })}]`);
 }
 
 sh("git", "init", "-q", "-b", "main");
@@ -132,6 +135,9 @@ await openax(["check", "--no-input"]);
 
 step("7. decisions");
 await openax(["decisions", "-v"]);
+step("8. agent mode (default): no API key; the coding agent gets instructions instead");
+await openax(["check"], undefined, "agent");
+
 const dir = join(repo, ".openax", "decisions");
 const first = readdirSync(dir).find((n) => n.startsWith("DEC-0001"));
 console.log("\nDecision file:\n\n" + readFileSync(join(dir, first), "utf8"));

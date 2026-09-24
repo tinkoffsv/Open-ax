@@ -12,6 +12,8 @@ const MAX_UNTRACKED_BYTES = 200_000;
 export interface Diff {
   text: string;
   files: string[];
+  /** Subset of `files` that git does not track yet (not visible in `git diff`). */
+  untracked: string[];
   /** Short hash of the commit the diff is taken against, if any. */
   base: string | null;
 }
@@ -107,14 +109,16 @@ export function getDiff(root: string, opts: DiffOptions = {}): Diff {
   let text = git(["diff", ...cached, target, ...spec], root);
   const files = lines(git(["diff", "--name-only", ...cached, target, ...spec], root));
 
+  let untrackedFiles: string[] = [];
   if (!opts.staged) {
     const untracked = untrackedAsDiff(root);
     text += untracked.text;
     files.push(...untracked.files);
+    untrackedFiles = untracked.files;
   }
 
   const base = opts.base === undefined ? headCommit(root) : git(["rev-parse", "--short", opts.base], root).trim();
-  return { text, files, base };
+  return { text, files, untracked: untrackedFiles, base };
 }
 
 export function isEmpty(diff: Diff): boolean {

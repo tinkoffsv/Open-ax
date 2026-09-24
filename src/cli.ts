@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/** Command-line interface: init, check, context, decisions. */
+/** Command-line interface: init, check, context, record, decisions. */
 
 import { mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
 import { join, relative } from "node:path";
@@ -7,12 +7,14 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { challenge, CONSISTENT, POTENTIAL_CONFLICT } from "./analysis/conflict.js";
 import { classify } from "./analysis/significance.js";
-import { loadConfig, writeDefaultConfig, decisionsDir, type Config } from "./config.js";
+import { renderCheck, renderContext } from "./agent.js";
+import { prefilter } from "./analysis/significance.js";
+import { AGENT_PROVIDER, loadConfig, writeDefaultConfig, decisionsDir, type Config } from "./config.js";
 import { OpenAXError } from "./errors.js";
 import { getDiff, headCommit, isEmpty, repoRoot } from "./git.js";
 import * as claude from "./integrations/claude.js";
 import { createClient, type LLMClient } from "./llm/index.js";
-import { DecisionStore } from "./memory/decisions.js";
+import { DecisionStore, isActive, newDecision } from "./memory/decisions.js";
 import { describeSource, draftDecision } from "./memory/remember.js";
 import { findRelevant } from "./memory/retrieval.js";
 
@@ -30,6 +32,8 @@ export interface MainOptions {
   cwd?: string;
   out?: (line: string) => void;
   err?: (line: string) => void;
+  /** Environment used for configuration overrides (defaults to process.env). */
+  env?: NodeJS.ProcessEnv;
 }
 
 const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
@@ -38,23 +42,32 @@ const USAGE = `openax — architectural memory for AI coding agents
 
 Usage:
   openax init [--no-claude]
-  openax check [--staged | --base <ref>] [--why <text> [--supersede]] [--no-input] [-v]
+  openax check [--staged | --base <ref>] [--no-input] [-v]
   openax context "<task>" [--diff]
+  openax record --title <text> --decision <text> --why <text>
+                [--related <id>]... [--supersedes <id>]... [--staged | --base <ref>]
   openax decisions [--all] [-v]
 
 Commands:
   init        create .openax/ and the CLAUDE.md section
-  check       analyze the current git diff for architectural changes
-  context     print decisions relevant to a task
+  check       review the current git diff for architectural changes
+  context     print recorded decisions for a task
+  record      save a decision (the developer's reason, verbatim)
   decisions   list recorded decisions
+
+By default OpenAX needs no API key: check and context print instructions and
+decisions for the coding agent that runs them, and the agent records the result
+with \`openax record\`. Set "provider": "anthropic" in .openax/config.json (or
+OPENAX_PROVIDER=anthropic) to let OpenAX call the Anthropic API itself.
 
 Options for check:
   --staged        only analyze staged changes
   --base <ref>    analyze changes since <ref> (e.g. HEAD~1, main)
-  --why <text>    record this reason without prompting
-  --supersede     with --why: mark conflicting decisions as superseded
   --no-input      never prompt; report only
   -v, --verbose
+  anthropic provider only:
+  --why <text>    record this reason without prompting
+  --supersede     with --why: mark conflicting decisions as superseded
 
 Exit codes: 0 ok, 1 unresolved potential conflict, 2 error.`;
 
@@ -98,7 +111,7 @@ class Session {
 
   load() {
     const root = this.root();
-    const config = loadConfig(root);
+    const config = loadConfig(root, this.opts.env);
     return { root, config, store: new DecisionStore(config.decisionsDir), llm: new LazyLLM(this.llmFactory, config) };
   }
 }
@@ -148,6 +161,23 @@ async function cmdCheck(flags: Flags, s: Session): Promise<number> {
   const diff = getDiff(root, { base: flags.base, staged: flags.staged });
   if (isEmpty(diff)) {
     s.out("No changes to analyze.");
+    return EXIT_OK;
+  }
+
+  if (config.provider === AGENT_PROVIDER) {
+    if (flags.why !== undefined) {
+      throw new OpenAXError(
+        '--why needs the anthropic provider. In agent mode, record with `openax record --title ... --decision ... --why "..."`.',
+      );
+    }
+    const skip = prefilter(diff.files);
+    if (skip) {
+      s.out("No architecturally significant changes detected.");
+      if (flags.verbose) s.out(`  (${skip})`);
+      return EXIT_OK;
+    }
+    const source = describeSource(headCommit(root), flags.base, flags.staged);
+    s.out(renderCheck(root, diff, store.active(), { base: flags.base, staged: flags.staged }, source));
     return EXIT_OK;
   }
 
@@ -249,7 +279,7 @@ async function cmdCheck(flags: Flags, s: Session): Promise<number> {
 // --- context ----------------------------------------------------------------------------------
 
 async function cmdContext(flags: Flags, positionals: string[], s: Session): Promise<number> {
-  const { root, store, llm } = s.load();
+  const { root, config, store, llm } = s.load();
   const task = positionals.join(" ").trim();
   if (!task && !flags.diff) {
     throw new OpenAXError('Provide a task, e.g. `openax context "Add invoice email delivery"`, or use --diff.');
@@ -261,14 +291,24 @@ async function cmdContext(flags: Flags, positionals: string[], s: Session): Prom
   }
 
   const parts: string[] = [];
-  if (task) parts.push(task);
+  const label: string[] = [];
+  if (task) {
+    parts.push(task);
+    label.push(task);
+  }
   if (flags.diff) {
     const diff = getDiff(root);
     if (isEmpty(diff) && !task) {
       s.out("No changes to analyze.");
       return EXIT_OK;
     }
-    parts.push("Code change touching: " + diff.files.slice(0, 30).join(", "), diff.text.slice(0, 8000));
+    const touching = "Code change touching: " + diff.files.slice(0, 30).join(", ");
+    parts.push(touching, diff.text.slice(0, 8000));
+    label.push(touching);
+  }
+  if (config.provider === AGENT_PROVIDER) {
+    s.out(renderContext(root, label.join("\n"), decisions, parts.join("\n")));
+    return EXIT_OK;
   }
   const relevant = await findRelevant(llm, parts.join("\n"), decisions);
   if (relevant.length === 0) {
@@ -288,6 +328,58 @@ async function cmdContext(flags: Flags, positionals: string[], s: Session): Prom
     if (reason) s.out(`Relevance: ${reason}`);
     s.out(`Source: ${rel(root, d.path)}\n`);
   }
+  return EXIT_OK;
+}
+
+// --- record -----------------------------------------------------------------------------------
+
+/** Accept both repeated flags and comma-separated values. */
+const ids = (values: string[] | undefined) =>
+  (values ?? []).flatMap((v) => v.split(",")).map((v) => v.trim()).filter(Boolean);
+
+function cmdRecord(flags: Flags, s: Session): number {
+  const { root, store } = s.load();
+  const title = flags.title?.trim();
+  const text = flags.decision?.trim();
+  const why = flags.why?.trim();
+  const missing = [!title && "--title", !text && "--decision", !why && "--why"].filter(Boolean);
+  if (missing.length > 0) {
+    throw new OpenAXError(`Missing ${missing.join(", ")}. The --why must be the developer's own reason.`);
+  }
+
+  const all = new Map(store.all().map((d) => [d.id, d]));
+  const supersedes = ids(flags.supersedes);
+  const related = [...new Set([...ids(flags.related), ...supersedes])];
+  for (const id of related) {
+    if (!all.has(id)) throw new OpenAXError(`Unknown decision ${id}. See \`openax decisions --all\`.`);
+  }
+  for (const id of supersedes) {
+    if (!isActive(all.get(id)!)) throw new OpenAXError(`${id} is not active, so it cannot be superseded.`);
+  }
+
+  const diff = getDiff(root, { base: flags.base, staged: flags.staged });
+  const commit = headCommit(root);
+  const today = new Date().toISOString().slice(0, 10);
+  const source = describeSource(commit, flags.base, flags.staged);
+  const decision = newDecision({
+    id: store.nextId(),
+    title: title!,
+    decision: text!,
+    why: why!,
+    evidence: `Recorded with \`openax record\` on ${today} from ${source}.`,
+    created: today,
+    commit: commit ?? "",
+    files: diff.files.slice(0, 12),
+    related,
+    supersedes,
+  });
+  const path = store.save(decision);
+  for (const old of supersedes) store.markSuperseded(old, decision.id);
+
+  s.out(`Remembered ${decision.id}: ${decision.title}`);
+  s.out(`  ${rel(root, path)}`);
+  for (const old of supersedes) s.out(`  ${old} marked as superseded by ${decision.id}`);
+  s.out("Commit this file together with the change.");
   return EXIT_OK;
 }
 
@@ -326,10 +418,18 @@ const OPTIONS = {
   verbose: { type: "boolean", short: "v" },
   diff: { type: "boolean" },
   all: { type: "boolean" },
+  title: { type: "string" },
+  decision: { type: "string" },
+  related: { type: "string", multiple: true },
+  supersedes: { type: "string", multiple: true },
 } as const;
 
 type Flags = {
-  [K in keyof typeof OPTIONS]?: (typeof OPTIONS)[K]["type"] extends "string" ? string : boolean;
+  [K in keyof typeof OPTIONS]?: (typeof OPTIONS)[K] extends { multiple: true }
+    ? string[]
+    : (typeof OPTIONS)[K]["type"] extends "string"
+      ? string
+      : boolean;
 };
 
 export async function main(argv: string[], opts: MainOptions = {}): Promise<number> {
@@ -358,6 +458,8 @@ export async function main(argv: string[], opts: MainOptions = {}): Promise<numb
         return await cmdCheck(flags, s);
       case "context":
         return await cmdContext(flags, rest, s);
+      case "record":
+        return cmdRecord(flags, s);
       case "decisions":
         return cmdDecisions(flags, s);
       default:
