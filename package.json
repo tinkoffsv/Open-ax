@@ -3,6 +3,7 @@
   "version": "0.0.0",
   "description": "Architectural memory for AI coding agents.",
   "license": "MIT",
+  "author": "Sergei Drozdov (https://github.com/tinkoffsv)",
   "type": "module",
   "bin": {
     "openax": "dist/cli.js"

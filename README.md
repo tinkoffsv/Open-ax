@@ -264,6 +264,11 @@ Commits on `main` follow [Conventional Commits](https://www.conventionalcommits.
 
 This release has no AST/language parsers, no repository-wide architecture reconstruction, no MCP server, no diagrams or C4, no architecture DSL, no policy engine, no Jira/Slack/GitHub integrations, and no web UI or backend. These may be future hypotheses. They are not part of this experiment.
 
+## Author
+
+OpenAX was created by Sergei Drozdov.
+I'm an enterprise architecture and AI engineering leader exploring how software architecture should evolve when AI agents become active participants in software development.
+
 ## License
 
 MIT
