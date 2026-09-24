@@ -1,12 +1,12 @@
 #!/usr/bin/env node
 /** Command-line interface: init, update, check, context, record, decisions. */
 
-import { mkdirSync, readFileSync, realpathSync, writeFileSync, existsSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, normalize, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { prefilter, truncate } from "./analysis/significance.js";
-import { decisionsDir, DEFAULT_LIMITS, isInitialized, loadConfig, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
+import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, needsMigration, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
 import { OpenAXError } from "./errors.js";
 import { getDiff, grep, headCommit, isEmpty, repoRoot } from "./git.js";
 import * as agents from "./integrations/agents.js";
@@ -109,6 +109,7 @@ class Session {
   load() {
     const root = this.root();
     const config = loadConfig(root);
+    if (needsMigration(root)) this.err(`warning: ${OPENAX_DIR}/ predates this version of OpenAX; run \`${CLI} update\` to migrate it.`);
     return {
       root,
       config,
@@ -135,13 +136,13 @@ function cmdInit(flags: Flags, s: Session): number {
   const root = s.root();
   const existed = isInitialized(root);
   const tools = flags.tools !== undefined ? parseTools(flags.tools) : existed ? loadConfig(root).tools : [...TOOLS];
-  const dir = decisionsDir(root);
-  mkdirSync(dir, { recursive: true });
-  if (!existsSync(join(dir, ".gitkeep"))) writeFileSync(join(dir, ".gitkeep"), "");
+  mkdirSync(join(root, OPENAX_DIR), { recursive: true });
+  const migrated = migrate(root);
 
   s.out(existed ? "OpenAX already initialized." : "Initialized OpenAX.");
-  s.out(`  decisions: ${rel(root, dir)}/`);
-  s.out(`  tools:     ${tools.join(", ") || "(none)"}`);
+  s.out(`  memory: ${OPENAX_DIR}/ (${MEMORY_DIRS.join(", ")})`);
+  s.out(`  tools:  ${tools.join(", ") || "(none)"}`);
+  if (existed) for (const line of migrated) s.out(line);
   installTools(root, tools, s);
   s.out("");
   for (const line of baseline(scanWithLimits(root))) s.out(line);
@@ -174,7 +175,13 @@ function baseline(result: ScanResult): string[] {
 }
 
 function cmdUpdate(s: Session): number {
-  const { root, config } = s.load();
+  const root = s.root();
+  const config = loadConfig(root);
+  const migrated = migrate(root);
+  if (migrated.length) {
+    s.out(`Migrating ${OPENAX_DIR}/ to the current layout:`);
+    for (const line of migrated) s.out(line);
+  }
   s.out(`Updating OpenAX agent files (${config.tools.join(", ") || "no tools"}):`);
   installTools(root, config.tools, s);
   return EXIT_OK;

@@ -13,7 +13,7 @@ function initialized(): string {
 }
 
 const observationsDir = (repo: string) => join(repo, ".openax", "observations");
-const count = (repo: string) => (existsSync(observationsDir(repo)) ? readdirSync(observationsDir(repo)).length : 0);
+const count = (repo: string) => (existsSync(observationsDir(repo)) ? readdirSync(observationsDir(repo)).filter((f) => f.endsWith(".md")).length : 0);
 
 const KAFKA = [
   "observe", "--kind", "ambiguity",

@@ -1,6 +1,6 @@
 /** End-to-end vertical slice through the CLI, playing the part of the calling agent. */
 
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import { EXIT_ERROR, EXIT_OK } from "../src/cli.js";
@@ -148,7 +148,7 @@ describe("openax", () => {
     const path = join(repo, ".openax", "config.json");
     writeFileSync(path, JSON.stringify({ version: 1, llm: { provider: "anthropic" }, max_diff_chars: 1000 }));
     run(repo, ["update"]);
-    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 2, tools: ["claude", "codex", "agents"], max_diff_chars: 1000 });
+    expect(JSON.parse(readFileSync(path, "utf8"))).toEqual({ version: 3, tools: ["claude", "codex", "agents"], max_diff_chars: 1000 });
   });
 
   it("validates record input", () => {
@@ -187,5 +187,37 @@ describe("openax", () => {
     const repo = makeRepo();
     expect(run(repo, ["--version"]).out).toMatch(/^openax \d+\.\d+\.\d+/);
     expect(run(repo, ["--help"]).out).toContain("Usage:");
+  });
+});
+
+describe("layout migration", () => {
+  it("init creates the full memory layout", () => {
+    const repo = makeRepo();
+    const r = run(repo, ["init", "--tools", "agents"]);
+    expect(r.code).toBe(EXIT_OK);
+    expect(r.out).toContain("memory: .openax/ (decisions, observations, model, scenarios, questions)");
+    for (const dir of ["decisions", "observations", "model", "scenarios", "questions"]) {
+      expect(existsSync(join(repo, ".openax", dir, ".gitkeep"))).toBe(true);
+    }
+    expect(JSON.parse(readFileSync(join(repo, ".openax", "config.json"), "utf8")).version).toBe(3);
+  });
+
+  it("update migrates a version-2 tree and warns until it runs", () => {
+    const repo = makeRepo();
+    mkdirSync(join(repo, ".openax", "decisions"), { recursive: true });
+    writeFileSync(join(repo, ".openax", "config.json"), JSON.stringify({ version: 2, tools: ["agents"] }));
+
+    expect(run(repo, ["decisions"]).err).toContain("run `npx @openax/cli update` to migrate");
+
+    const first = run(repo, ["update"]);
+    expect(first.code).toBe(EXIT_OK);
+    expect(first.out).toContain("Migrating .openax/ to the current layout:");
+    expect(first.out).toContain(".openax/model/: created");
+    expect(first.out).toContain(".openax/config.json: version 2 -> 3");
+    expect(existsSync(join(repo, ".openax", "questions", ".gitkeep"))).toBe(true);
+
+    const second = run(repo, ["update"]);
+    expect(second.out).not.toContain("Migrating");
+    expect(run(repo, ["decisions"]).err).toBe("");
   });
 });
