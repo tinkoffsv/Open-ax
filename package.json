@@ -17,7 +17,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tinkoffsv/Open-ax.git"
+    "url": "git+https://github.com/tinkoffsv/Openax.git"
   },
   "keywords": [
     "architecture",
@@ -41,5 +41,9 @@
     "@types/node": "^26.6.2",
     "typescript": "^7.0.2",
     "vitest": "^5.0.1"
+  },
+  "homepage": "https://github.com/tinkoffsv/Openax#readme",
+  "bugs": {
+    "url": "https://github.com/tinkoffsv/Openax/issues"
   }
 }

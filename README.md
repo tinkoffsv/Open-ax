@@ -109,8 +109,8 @@ npm install -D openax        # then: npx openax check
 From source:
 
 ```bash
-git clone https://github.com/tinkoffsv/Open-ax.git
-cd Open-ax
+git clone https://github.com/tinkoffsv/Openax.git
+cd Openax
 npm ci && npm run build
 npm link                     # puts `openax` on your PATH
 ```
