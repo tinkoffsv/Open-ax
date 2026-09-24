@@ -96,14 +96,14 @@ No installation is needed. Run it with `npx`:
 
 ```bash
 export ANTHROPIC_API_KEY=sk-ant-...
-npx openax init
+npx @openax/cli init
 ```
 
 Or install it globally, or as a dev dependency of your project:
 
 ```bash
-npm install -g openax        # then: openax check
-npm install -D openax        # then: npx openax check
+npm install -g @openax/cli   # then: openax check
+npm install -D @openax/cli   # then: npx openax check
 ```
 
 From source:
@@ -117,7 +117,7 @@ npm link                     # puts `openax` on your PATH
 
 ## Usage
 
-Run these inside the git repository of your project. The examples use `openax`. With `npx`, prefix each command: `npx openax check`.
+Run these inside the git repository of your project. The examples use `openax`. Without installing, run them through `npx`: `npx @openax/cli check`.
 
 ### `openax init`
 

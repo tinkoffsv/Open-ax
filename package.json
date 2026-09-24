@@ -1,5 +1,5 @@
 {
-  "name": "openax",
+  "name": "@openax/cli",
   "version": "0.1.0",
   "description": "Architectural memory for AI coding agents.",
   "license": "MIT",
@@ -45,5 +45,8 @@
   "homepage": "https://github.com/tinkoffsv/Openax#readme",
   "bugs": {
     "url": "https://github.com/tinkoffsv/Openax/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   }
 }
