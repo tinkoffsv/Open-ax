@@ -1,18 +1,17 @@
 #!/usr/bin/env node
 /** Command-line interface: init, update, check, context, record, decisions. */
 
-import { existsSync, mkdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, isAbsolute, join, normalize, relative } from "node:path";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { prefilter, truncate } from "./analysis/significance.js";
-import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, needsMigration, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
+import { cmdModel, cmdQuestion, cmdScenario, confirmElements, MODEL_USAGE, QUESTION_USAGE, SCENARIO_USAGE } from "./commands/model.js";
+import { DEFAULT_LIMITS, isInitialized, loadConfig, MEMORY_DIRS, migrate, OPENAX_DIR, parseTools, TOOLS, writeConfig, type Tool } from "./config.js";
 import { OpenAXError } from "./errors.js";
-import { getDiff, grep, headCommit, isEmpty, repoRoot } from "./git.js";
+import { getDiff, grep, headCommit, isEmpty } from "./git.js";
 import * as agents from "./integrations/agents.js";
-import { DecisionStore } from "./memory/decisions.js";
-import { KINDS, newObservation, ObservationStore, type Kind } from "./memory/observations.js";
-import { writeProject } from "./memory/project.js";
+import { KINDS, newObservation, type Kind } from "./memory/observations.js";
 import { buildDecision, describeSource } from "./memory/remember.js";
 import { candidates, limits, memoryCandidates, mentions } from "./memory/retrieval.js";
 import {
@@ -32,15 +31,9 @@ import {
 } from "./packet.js";
 import { isConfiguredOnly, isServiceFact, isWorkerFact, scanRepository } from "./scan/index.js";
 import type { ScanResult } from "./scan/types.js";
+import { EXIT_ERROR, EXIT_OK, evidencePath, idList, OPTIONS, refreshProject, rel, required, Session, type Flags, type MainOptions } from "./session.js";
 
-export const EXIT_OK = 0;
-export const EXIT_ERROR = 2;
-
-export interface MainOptions {
-  cwd?: string;
-  out?: (line: string) => void;
-  err?: (line: string) => void;
-}
+export { EXIT_ERROR, EXIT_OK, type MainOptions };
 
 const VERSION: string = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -57,6 +50,9 @@ Usage:
   openax why "<subject>" [--json]
   openax check [--staged | --base <ref>] [--json]
   openax context "<task>" [--diff] [--json]
+  openax model <list|show|add|set|relate|confirm|remove> ...   (openax model --help)
+  openax scenario <add|list> ...                                (openax scenario --help)
+  openax question <add|list|answer> ...                         (openax question --help)
   openax observe --kind <kind> --title <t> --statement <s> --evidence <path>... [--question <q>]
   openax record --title <t> --decision <d> --why <reason> [options]
   openax decisions [--observations] [--all] [-v]
@@ -69,6 +65,9 @@ Commands:
   why         print decisions, observations and code mentions that explain a subject
   check       print the current git diff and recorded decisions for the agent to review
   context     print recorded decisions for the agent to apply to a task
+  model       read and write the architecture model (.openax/model/): elements, purposes, relations
+  scenario    the scenario registry (.openax/scenarios/): business scenarios elements are tagged with
+  question    the question queue (.openax/questions/): what only the developer can answer
   observe     record something found in the repository (OBSERVED, with evidence)
   record      record a decision (the reason must be the developer's own words)
   decisions   list recorded decisions
@@ -89,41 +88,13 @@ Options for record:
   --related <ids>       related decision IDs (repeatable or comma-separated)
   --supersede <ids>     decision IDs this one replaces (repeatable or comma-separated)
   --resolves <ids>      open ambiguity observations this decision answers (repeatable or comma-separated)
+  --answers <ids>       open questions (Q-...) this decision answers; their elements become confirmed
+  --elements <ids>      model elements this decision concerns
+  --inferred            the reason was reconstructed from history, not spoken by the developer:
+                        requires --source with the verbatim citation (commit, PR, doc line, comment)
   --staged | --base <ref>   which changes to take the file list from (as for check)
 
 Exit codes: 0 ok, 2 error.`;
-
-class Session {
-  readonly out: (line: string) => void;
-  readonly err: (line: string) => void;
-
-  constructor(readonly opts: MainOptions) {
-    this.out = opts.out ?? ((line) => process.stdout.write(line + "\n"));
-    this.err = opts.err ?? ((line) => process.stderr.write(line + "\n"));
-  }
-
-  root(): string {
-    return repoRoot(this.opts.cwd);
-  }
-
-  load() {
-    const root = this.root();
-    const config = loadConfig(root);
-    if (needsMigration(root)) this.err(`warning: ${OPENAX_DIR}/ predates this version of OpenAX; run \`${CLI} update\` to migrate it.`);
-    return {
-      root,
-      config,
-      store: new DecisionStore(config.decisionsDir),
-      observations: new ObservationStore(config.observationsDir),
-    };
-  }
-
-  json(value: unknown): void {
-    this.out(JSON.stringify(value, null, 2));
-  }
-}
-
-const rel = (root: string, path: string | null) => (path ? relative(root, path) : "");
 
 // --- init / update ----------------------------------------------------------------------------
 
@@ -315,23 +286,9 @@ function cmdContext(flags: Flags, positionals: string[], s: Session): number {
 
 // --- observe ----------------------------------------------------------------------------------
 
-/** Regenerate `.openax/project.md` from the current observations. */
-function refreshProject(observations: ObservationStore): string {
-  return writeProject(dirname(observations.directory), observations.all());
-}
-
-/** Repository-relative path that exists and stays inside the repository. */
-function evidencePath(root: string, raw: string): string {
-  const path = normalize(raw.trim()).replace(/\/+$/, "");
-  const inside = !isAbsolute(path) && path !== ".." && !path.startsWith("../");
-  if (!path || !inside || !existsSync(join(root, path))) {
-    throw new OpenAXError(`Evidence path \`${raw}\` does not exist in this repository.`);
-  }
-  return path;
-}
-
 function cmdObserve(flags: Flags, s: Session): number {
-  const { root, observations } = s.load();
+  const m = s.load();
+  const { root, observations } = m;
   const kind = flags.kind?.trim() ?? "";
   if (!(KINDS as readonly string[]).includes(kind)) {
     throw new OpenAXError(`observe needs --kind, one of: ${KINDS.join(", ")}.`);
@@ -353,7 +310,7 @@ function cmdObserve(flags: Flags, s: Session): number {
     evidence,
   });
   const path = observations.save(observation);
-  const overview = refreshProject(observations);
+  const overview = refreshProject(m);
   s.out(`Observed ${observation.id}: ${observation.title}`);
   s.out(`  ${rel(root, path)}`);
   s.out(`  ${rel(root, overview)} updated`);
@@ -362,21 +319,23 @@ function cmdObserve(flags: Flags, s: Session): number {
 
 // --- record -----------------------------------------------------------------------------------
 
-function required(flags: Flags, name: "title" | "decision" | "why" | "statement"): string {
-  const value = flags[name]?.trim();
-  if (!value) throw new OpenAXError(`Missing a non-empty --${name}.`);
-  return value;
-}
-
-/** Accept both repeated flags and comma-separated values. */
-const idList = (values?: string[]) =>
-  (values ?? []).flatMap((v) => v.split(",")).map((id) => id.trim()).filter(Boolean);
-
 function cmdRecord(flags: Flags, s: Session): number {
-  const { root, store, observations } = s.load();
+  const m = s.load();
+  const { root, store, observations, questions, model } = m;
   const title = required(flags, "title");
   const decisionText = required(flags, "decision");
   const why = required(flags, "why");
+  const citation = flags.source?.trim() ?? "";
+  if (flags.inferred && !citation) {
+    throw new OpenAXError("An inferred decision needs --source: the verbatim citation (commit, PR, doc line, comment) it was derived from. Without a textual source it stays a question: `openax question add`.");
+  }
+  const answers = idList(flags.answers);
+  for (const id of answers) {
+    const q = questions.get(id);
+    if (!q) throw new OpenAXError(`Unknown question ${id}.`);
+    if (q.status !== "open") throw new OpenAXError(`${id} is already answered${q.answeredBy ? ` (${q.answeredBy})` : ""}.`);
+  }
+  const elements = [...new Set(idList(flags.elements).map((id) => model.require(id).id))];
 
   const all = new Map(store.all().map((d) => [d.id, d]));
   const supersede = idList(flags.supersede);
@@ -407,16 +366,27 @@ function cmdRecord(flags: Flags, s: Session): number {
     related,
     supersedes: supersede,
     resolves,
+    answers,
+    elements,
+    status: flags.inferred ? "inferred" : "active",
+    citation,
   });
   const path = store.save(decision);
   for (const old of supersede) store.markSuperseded(old, decision.id);
   for (const id of resolves) observations.markResolved(id, decision.id);
-  if (resolves.length) refreshProject(observations);
+  const confirmed: string[] = [];
+  for (const id of answers) {
+    const q = questions.answer(id, why, decision.id);
+    confirmed.push(...confirmElements(m, q.elements));
+  }
+  refreshProject(m);
 
-  s.out(`Remembered ${decision.id}: ${decision.title}`);
+  s.out(`${flags.inferred ? "Inferred" : "Remembered"} ${decision.id}: ${decision.title}${flags.inferred ? " [inferred, not confirmed by the developer]" : ""}`);
   s.out(`  ${rel(root, path)}`);
   for (const old of supersede) s.out(`  ${old} marked as superseded by ${decision.id}`);
   for (const id of resolves) s.out(`  ${id} resolved by ${decision.id}`);
+  for (const id of answers) s.out(`  ${id} answered by ${decision.id}`);
+  if (confirmed.length) s.out(`  confirmed: ${confirmed.join(", ")}`);
   s.out("Review the file and commit it together with the change.");
   return EXIT_OK;
 }
@@ -467,39 +437,6 @@ function listObservations(flags: Flags, s: Session): number {
 
 // --- entry point ------------------------------------------------------------------------------
 
-const OPTIONS = {
-  help: { type: "boolean", short: "h" },
-  version: { type: "boolean" },
-  tools: { type: "string" },
-  staged: { type: "boolean" },
-  base: { type: "string" },
-  json: { type: "boolean" },
-  title: { type: "string" },
-  decision: { type: "string" },
-  kind: { type: "string" },
-  statement: { type: "string" },
-  evidence: { type: "string", multiple: true },
-  question: { type: "string" },
-  why: { type: "string" },
-  summary: { type: "string" },
-  change: { type: "string", multiple: true },
-  related: { type: "string", multiple: true },
-  supersede: { type: "string", multiple: true },
-  resolves: { type: "string", multiple: true },
-  verbose: { type: "boolean", short: "v" },
-  diff: { type: "boolean" },
-  all: { type: "boolean" },
-  observations: { type: "boolean" },
-} as const;
-
-type Flags = {
-  [K in keyof typeof OPTIONS]?: (typeof OPTIONS)[K] extends { multiple: true }
-    ? string[]
-    : (typeof OPTIONS)[K]["type"] extends "string"
-      ? string
-      : boolean;
-};
-
 export function main(argv: string[], opts: MainOptions = {}): number {
   const s = new Session(opts);
   try {
@@ -516,7 +453,7 @@ export function main(argv: string[], opts: MainOptions = {}): number {
       return EXIT_OK;
     }
     if (flags.help || !command) {
-      s.out(USAGE);
+      s.out(command === "model" ? MODEL_USAGE : command === "scenario" ? SCENARIO_USAGE : command === "question" ? QUESTION_USAGE : USAGE);
       return command || flags.help ? EXIT_OK : EXIT_ERROR;
     }
     switch (command) {
@@ -534,6 +471,12 @@ export function main(argv: string[], opts: MainOptions = {}): number {
         return cmdCheck(flags, s);
       case "context":
         return cmdContext(flags, rest, s);
+      case "model":
+        return cmdModel(flags, rest, s);
+      case "scenario":
+        return cmdScenario(flags, rest, s);
+      case "question":
+        return cmdQuestion(flags, rest, s);
       case "observe":
         return cmdObserve(flags, s);
       case "record":

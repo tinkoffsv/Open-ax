@@ -36,6 +36,12 @@ export interface RecordInput {
   related?: string[];
   supersedes?: string[];
   resolves?: string[];
+  answers?: string[];
+  elements?: string[];
+  /** `inferred` when reconstructed from history; then `citation` is mandatory. */
+  status?: "active" | "inferred";
+  /** Verbatim citation for an inferred decision (commit, PR, doc line, comment). */
+  citation?: string;
   today?: string;
 }
 
@@ -54,5 +60,9 @@ export function buildDecision(input: RecordInput): Decision {
     related: input.related ?? [],
     supersedes: input.supersedes ?? [],
     resolves: input.resolves ?? [],
+    answers: input.answers ?? [],
+    elements: input.elements ?? [],
+    status: input.status ?? "active",
+    source: input.citation?.trim() ?? "",
   });
 }

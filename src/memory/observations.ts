@@ -10,7 +10,8 @@ import { OpenAXError } from "../errors.js";
 import { slugify } from "./decisions.js";
 import { parseValue, setFrontmatter, splitFrontmatter } from "./markdown.js";
 
-export const KINDS = ["component", "datastore", "integration", "mechanism", "ambiguity"] as const;
+/** `smell` is written by `openax lint`: a deterministic finding, never a decision. */
+export const KINDS = ["component", "datastore", "integration", "mechanism", "ambiguity", "smell"] as const;
 export type Kind = (typeof KINDS)[number];
 
 const LIST_KEYS = new Set(["evidence"]);
