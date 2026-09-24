@@ -7,9 +7,12 @@
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { OpenAXError } from "../errors.js";
+import { parseValue, setFrontmatter, splitFrontmatter } from "./markdown.js";
+
+export { setFrontmatter };
 
 const ID_RE = /DEC-(\d+)/;
-const LIST_KEYS = new Set(["files", "related", "supersedes"]);
+const LIST_KEYS = new Set(["files", "related", "supersedes", "resolves"]);
 const KNOWN_SECTIONS = new Set(["Decision", "Why", "Evidence"]);
 
 export interface Decision {
@@ -24,6 +27,8 @@ export interface Decision {
   files: string[];
   related: string[];
   supersedes: string[];
+  /** Observations (ambiguities) this decision answers. */
+  resolves: string[];
   supersededBy: string;
   path: string | null;
   extraSections: Record<string, string>;
@@ -40,6 +45,7 @@ export function newDecision(fields: Partial<Decision> & Pick<Decision, "id" | "t
     files: [],
     related: [],
     supersedes: [],
+    resolves: [],
     supersededBy: "",
     path: null,
     extraSections: {},
@@ -49,35 +55,6 @@ export function newDecision(fields: Partial<Decision> & Pick<Decision, "id" | "t
 
 export const isActive = (d: Decision) => d.status.toLowerCase() === "active";
 
-/** Compact form used for LLM prompts. */
-export function brief(d: Decision): string {
-  const out = [`### ${d.id}: ${d.title}`];
-  if (d.status !== "active") out.push(`Status: ${d.status}`);
-  if (d.decision) out.push(`Decision: ${d.decision}`);
-  if (d.why) out.push(`Why: ${d.why}`);
-  return out.join("\n");
-}
-
-const unquote = (s: string) => s.trim().replace(/^['"]|['"]$/g, "");
-
-function parseValue(key: string, raw: string): string | string[] {
-  raw = raw.trim();
-  if (!LIST_KEYS.has(key)) return unquote(raw);
-  const inner = raw.startsWith("[") && raw.endsWith("]") ? raw.slice(1, -1) : raw;
-  return inner
-    .split(",")
-    .map(unquote)
-    .filter(Boolean);
-}
-
-function splitFrontmatter(text: string): { header: string | null; body: string } {
-  if (!text.startsWith("---")) return { header: null, body: text };
-  const end = text.indexOf("\n---", 3);
-  if (end === -1) return { header: null, body: text };
-  const afterFence = text.slice(end + 4).replace(/^-*/, "").replace(/^\r?\n/, "");
-  return { header: text.slice(3, end), body: afterFence };
-}
-
 export function parseDecision(text: string, path: string | null = null): Decision {
   const meta: Record<string, string | string[]> = {};
   const { header, body } = splitFrontmatter(text);
@@ -85,7 +62,7 @@ export function parseDecision(text: string, path: string | null = null): Decisio
     const idx = line.indexOf(":");
     if (idx === -1 || line.trimStart().startsWith("#")) continue;
     const key = line.slice(0, idx).trim();
-    meta[key] = parseValue(key, line.slice(idx + 1));
+    meta[key] = parseValue(key, line.slice(idx + 1), LIST_KEYS);
   }
 
   const title = /^#\s+(.+?)\s*$/m.exec(body)?.[1] ?? "";
@@ -115,6 +92,7 @@ export function parseDecision(text: string, path: string | null = null): Decisio
     files: list("files"),
     related: list("related"),
     supersedes: list("supersedes"),
+    resolves: list("resolves"),
     supersededBy: str("superseded_by"),
     path,
     extraSections: Object.fromEntries(Object.entries(sections).filter(([k]) => !KNOWN_SECTIONS.has(k))),
@@ -130,6 +108,7 @@ export function renderDecision(d: Decision): string {
     ["files", d.files],
     ["related", d.related],
     ["supersedes", d.supersedes],
+    ["resolves", d.resolves],
     ["superseded_by", d.supersededBy],
   ];
   const header = meta
@@ -147,17 +126,6 @@ export function renderDecision(d: Decision): string {
     if (content) parts.push(`## ${name}\n${content.trim()}\n`);
   }
   return parts.join("\n");
-}
-
-/** Set `key: value` in the frontmatter block, adding the block if needed; the body is untouched. */
-export function setFrontmatter(text: string, key: string, value: string): string {
-  const line = `${key}: ${value}`;
-  const end = text.startsWith("---") ? text.indexOf("\n---", 3) : -1;
-  if (end === -1) return `---\n${line}\n---\n${text}`;
-  let header = text.slice(0, end);
-  const pattern = new RegExp(`^${key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*:.*$`, "m");
-  header = pattern.test(header) ? header.replace(pattern, line) : `${header}\n${line}`;
-  return header + text.slice(end);
 }
 
 export function slugify(text: string, maxWords = 6): string {

@@ -1,11 +1,10 @@
-/** RECALL: find previously recorded decisions that matter for a task or a change. */
+/** RECALL: narrow recorded decisions to the candidates the calling agent should read. */
 
-import type { LLMClient } from "../llm/base.js";
-import { loadPrompt } from "../prompts.js";
-import { brief, type Decision } from "./decisions.js";
+import type { Decision } from "./decisions.js";
+import type { Observation } from "./observations.js";
 
-/** Above this many active decisions, a cheap lexical pre-filter narrows the candidates sent to the LLM. */
-export const limits = { maxLlmCandidates: 40 };
+/** Above this many active decisions, a cheap lexical pre-filter narrows what the agent is shown. */
+export const limits = { maxCandidates: 40 };
 
 const STOPWORDS = new Set(
   (
@@ -14,67 +13,60 @@ const STOPWORDS = new Set(
   ).split(" "),
 );
 
-export const RELEVANCE_SCHEMA = {
-  type: "object",
-  properties: {
-    relevant: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: { id: { type: "string" }, reason: { type: "string" } },
-        required: ["id", "reason"],
-        additionalProperties: false,
-      },
-    },
-  },
-  required: ["relevant"],
-  additionalProperties: false,
-};
-
-export interface RelevantDecision {
-  decision: Decision;
-  reason: string;
-}
-
 export function tokenize(text: string): Set<string> {
   const words = text.toLowerCase().match(/[a-z0-9]+/g) ?? [];
   return new Set(words.filter((w) => w.length > 2 && !STOPWORDS.has(w)));
 }
 
-/** Order decisions by keyword overlap with the query. Deterministic and cheap; ties keep input order. */
-export function lexicalRank(query: string, decisions: Decision[], limit: number): Decision[] {
+/** Order items by keyword overlap with the query. Deterministic and cheap; ties keep input order. */
+export function rankByKeywords<T>(query: string, items: T[], text: (item: T) => string, limit: number): T[] {
   const q = tokenize(query);
-  return decisions
-    .map((d, index) => {
-      const tokens = tokenize([d.title, d.decision, d.why, d.files.join(" ")].join(" "));
+  return items
+    .map((item, index) => {
+      const tokens = tokenize(text(item));
       let score = 0;
       for (const t of q) if (tokens.has(t)) score++;
-      return { d, score, index };
+      return { item, score, index };
     })
     .sort((a, b) => b.score - a.score || a.index - b.index)
     .slice(0, limit)
-    .map((x) => x.d);
+    .map((x) => x.item);
 }
 
-export async function findRelevant(llm: LLMClient, query: string, decisions: Decision[]): Promise<RelevantDecision[]> {
-  if (decisions.length === 0 || !query.trim()) return [];
-  const candidates =
-    decisions.length > limits.maxLlmCandidates ? lexicalRank(query, decisions, limits.maxLlmCandidates) : decisions;
+const decisionText = (d: Decision) => [d.title, d.decision, d.why, d.files.join(" ")].join(" ");
 
-  const listing = candidates.map(brief).join("\n\n");
-  const user = `<decisions>\n${listing}\n</decisions>\n\n<query>\n${query.trim()}\n</query>`;
-  const result = await llm.completeJson(loadPrompt("relevance"), user, RELEVANCE_SCHEMA, 2000);
+export function lexicalRank(query: string, decisions: Decision[], limit: number): Decision[] {
+  return rankByKeywords(query, decisions, decisionText, limit);
+}
 
-  const byId = new Map(candidates.map((d) => [d.id, d]));
-  const seen = new Set<string>();
-  const relevant: RelevantDecision[] = [];
-  for (const item of result?.relevant ?? []) {
-    const id = String(item?.id ?? "").trim();
-    const decision = byId.get(id);
-    if (decision && !seen.has(id)) {
-      seen.add(id);
-      relevant.push({ decision, reason: String(item?.reason ?? "").trim() });
-    }
-  }
-  return relevant;
+/** All decisions if there are few; otherwise the ones sharing the most keywords with the query. */
+export function candidates(query: string, decisions: Decision[]): Decision[] {
+  return decisions.length > limits.maxCandidates ? lexicalRank(query, decisions, limits.maxCandidates) : decisions;
+}
+
+export type MemoryItem = { decision: Decision } | { observation: Observation };
+
+const itemText = (m: MemoryItem) =>
+  "decision" in m
+    ? decisionText(m.decision)
+    : [m.observation.title, m.observation.statement, m.observation.question, m.observation.evidence.join(" ")].join(" ");
+
+/** Decisions and observations under one bound: all if few, otherwise the best keyword matches. */
+export function memoryCandidates(query: string, decisions: Decision[], observations: Observation[]) {
+  const items: MemoryItem[] = [...decisions.map((decision) => ({ decision })), ...observations.map((observation) => ({ observation }))];
+  const kept = items.length > limits.maxCandidates ? rankByKeywords(query, items, itemText, limits.maxCandidates) : items;
+  return {
+    decisions: kept.flatMap((m) => ("decision" in m ? [m.decision] : [])),
+    observations: kept.flatMap((m) => ("observation" in m ? [m.observation] : [])),
+  };
+}
+
+/** True when the text mentions the subject: as a phrase, or with every keyword of it. */
+export function mentions(subject: string, text: string): boolean {
+  const haystack = text.toLowerCase();
+  if (haystack.includes(subject.trim().toLowerCase())) return true;
+  const words = tokenize(subject);
+  if (words.size === 0) return false;
+  const tokens = tokenize(text);
+  return [...words].every((w) => tokens.has(w));
 }

@@ -1,12 +1,19 @@
+## Repository hygiene
+
+This repository is public. Anything committed here is published.
+
+- **Check every commit for secrets.** Before committing, review the staged diff (`git diff --cached`) for API keys and tokens (e.g. `sk-...`, `ghp_...`, `xox[bp]-...`, `AKIA...`), private keys (`-----BEGIN ... PRIVATE KEY-----`), passwords, connection strings with credentials, and `.env` contents. If anything looks like a real secret, do not commit: stop and tell the developer. Example values in tests and docs must be obviously fake (`sk-test-123`, `example-pass`).
+- **Local development material stays local.** `docs/` and `openspec/` are git-ignored: dogfooding logs, specs, and working notes. Never force-add them (`git add -f`), and never copy their content into tracked files. This applies especially to details about the private projects OpenAX is tested on.
+
 <!-- openax:start -->
 ## Architectural memory (OpenAX)
 
-This project records architectural decisions — the *why* behind its structure — with OpenAX in `.openax/decisions/`.
+This project keeps its architectural memory with OpenAX in `.openax/`: decisions (the *why* behind its structure, DECIDED by the developer) and observations (what was found in the code, OBSERVED). OpenAX does not call a model or need an API key: you do the reasoning, and the CLI supplies the data and records the result.
 
-- Before architecturally significant work (new infrastructure, external integrations, persistence, caching, background jobs, auth, communication between components, or a second way of doing something the project already does), run `npx @openax/cli context "<task>"` and follow the decisions it returns.
+- If `.openax/observations/` is empty, the project has not been onboarded yet: when the developer asks, run `npx @openax/cli onboard` and follow its instructions.
+- Before architecturally significant work (new infrastructure, external integrations, persistence, caching, background jobs, auth, communication between components, or a second way of doing something the project already does), run `npx @openax/cli context "<task>"` and follow its instructions.
 - Treat recorded decisions as the developer's intent. Do not silently override or work around one. If the task seems to require contradicting a decision, stop and ask the developer before proceeding.
-- After making such changes, run `npx @openax/cli check --no-input`.
-  - If it reports a potential conflict, tell the developer and ask whether it is intentional.
-  - If it reports a new architectural change, ask the developer *why* and record their answer verbatim with `npx @openax/cli check --why "<their words>"` (add `--supersede` only if they confirm the change replaces the conflicting decision). Never invent the reason yourself.
-- Do not copy decisions into this file; OpenAX is the source of architectural memory.
+- After making such changes, run `npx @openax/cli check` and follow its instructions: report potential conflicts to the developer, ask the developer *why* for new architectural changes, and record their answer verbatim with `npx @openax/cli record`. Never invent the reason.
+- To explain why something exists in this project, run `npx @openax/cli why "<subject>"`.
+- Do not copy decisions or observations into this file; OpenAX is the source of architectural memory.
 <!-- openax:end -->

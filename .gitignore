@@ -142,3 +142,13 @@ vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
 
+
+# OpenSpec: local only, not published
+openspec/
+.claude/commands/opsx/
+.claude/skills/openspec-*/
+.agents/skills/openspec-*/
+.agents/skills/.openspec-target
+
+# Local development material: dogfooding logs, working notes (never published)
+docs/

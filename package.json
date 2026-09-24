@@ -10,7 +10,8 @@
   },
   "files": [
     "dist",
-    "prompts"
+    "prompts",
+    "templates"
   ],
   "engines": {
     "node": ">=22"
@@ -33,9 +34,6 @@
     "test": "vitest run",
     "demo": "npm run build && node examples/demo.mjs",
     "prepublishOnly": "npm run build"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.128.0"
   },
   "devDependencies": {
     "@types/node": "^26.6.2",

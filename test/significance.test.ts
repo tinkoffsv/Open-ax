@@ -1,8 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { classify, globToRegExp, isTrivialPath, prefilter, truncate } from "../src/analysis/significance.js";
-import { FakeLLM } from "./helpers.js";
-
-const diff = (text: string, files: string[]) => ({ text, files, base: null });
+import { globToRegExp, isTrivialPath, prefilter, truncate } from "../src/analysis/significance.js";
 
 describe("prefilter", () => {
   it("recognizes trivial paths", () => {
@@ -26,37 +23,7 @@ describe("prefilter", () => {
   });
 });
 
-describe("classify", () => {
-  it("does not call the LLM for trivial diffs", async () => {
-    const llm = new FakeLLM();
-    const result = await classify(llm, diff("diff", ["docs/guide.md"]), 1000);
-    expect(result.significant).toBe(false);
-    expect(result.skippedReason).toBeTruthy();
-    expect(llm.calls).toEqual([]);
-  });
-
-  it("returns structured output", async () => {
-    const llm = new FakeLLM({
-      significance: {
-        significant: true,
-        confidence: 0.91,
-        summary: "Introduces Redis and Celery",
-        changes: ["new infrastructure dependency: Redis", " "],
-      },
-    });
-    const result = await classify(llm, diff("+import celery", ["tasks.py"]), 1000);
-    expect(result).toMatchObject({
-      significant: true,
-      confidence: 0.91,
-      changes: ["new infrastructure dependency: Redis"],
-    });
-  });
-
-  it("treats low confidence as not significant", async () => {
-    const llm = new FakeLLM({ significance: { significant: true, confidence: 0.4, summary: "maybe", changes: [] } });
-    expect((await classify(llm, diff("+x", ["a.py"]), 1000)).significant).toBe(false);
-  });
-
+describe("truncate", () => {
   it("truncates long diffs", () => {
     expect(truncate("abc", 10)).toEqual({ text: "abc", truncated: false });
     const { text, truncated } = truncate("x".repeat(50), 10);
